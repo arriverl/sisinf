@@ -1,0 +1,4 @@
+# CP-SAT 收尾（solve_sisinf.py 中 cp_sat_repair）
+# 注意：ortools 9.15+ 依赖 protobuf>=6.33，与部分旧包（如 opentelemetry-proto<5 的 protobuf 上界）冲突。
+# 请务必在本项目 .venv 中安装，勿与用户级全局环境混用。
+ortools>=9.10,<10

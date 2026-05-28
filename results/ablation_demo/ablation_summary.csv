@@ -1,0 +1,4 @@
+variant,num_instances,num_success,success_rate,avg_time_sec,avg_overflow_sum,wall_time_sec
+baseline_iir_cls,1.0,1.0,1.0,0.061534881591796875,0.0,0.061733245849609375
+dual_space_only,1.0,1.0,1.0,0.07605385780334473,0.0,0.07626008987426758
+full_hybrid_entropy,1.0,1.0,1.0,0.07813286781311035,0.0,0.07832050323486328

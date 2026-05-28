@@ -1,0 +1,7 @@
+numpy>=1.20
+
+# 合数模 q 的核游走（scripts/modq_kernel.py）需要 sympy：pip install sympy
+
+# Optional: CP-SAT 收尾 — 见 requirements-ortools.txt（建议仅在 .venv 中安装，避免与全局 protobuf 冲突）
+# Optional: BKZ lattice seeds (Linux/macOS/WSL; Windows may need extra setup)
+# fpylll>=0.6.0
