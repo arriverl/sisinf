@@ -4,7 +4,7 @@ import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -42,9 +42,12 @@ class SearchConfig:
     bkz_beta: int = 0  # 0 disables BKZ; try e.g. 20–40 on moderate dimension
     bkz_max_vectors: int = 24
     bkz_max_dim: int = 96  # skip BKZ when n+m exceeds this (cost guard)
+    bkz_combo_depth: int = 0  # enumerate small combos of first k reduced basis v-parts (class 1)
+    bkz_combo_coeff_max: int = 2
     parallel_workers: int = 1
     # 「残差–模」联动创新：拉回种子 + 双坐标救援 + 梯度踢
     modular_pull_variants: int = 4  # 0 disables pull seeds in dual builder
+    cvp_lift_variants: int = 6  # non-homogeneous SIS -> CVP lifting seeds
     pair_relief_every: int = 32  # 0 disables; periodic 2-coordinate joint moves
     pair_relief_attempts: int = 12
     pair_relief_radius: int = 2
@@ -113,6 +116,74 @@ def objective_uv_and_rr_sq(residual: np.ndarray, v: np.ndarray, gamma: int) -> T
     viol, overflow_sum, max_overflow = objective_uv(residual, v, gamma)
     rr_sq = float(np.dot(residual.astype(np.float64), residual.astype(np.float64)))
     return viol, overflow_sum, max_overflow, rr_sq
+
+
+def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: bool = False) -> SearchConfig:
+    """按赛题类别叠加默认搜索参数（见 sis_problem_taxonomy.py）。"""
+    if sis_class == 1:
+        beta = 32 if aggressive else 28
+        return SearchConfig(
+            **{
+                **asdict(cfg),
+                "use_bkz_seeds": True,
+                "bkz_beta": beta,
+                "bkz_max_vectors": 32 if aggressive else 24,
+                "bkz_max_dim": 140 if aggressive else 120,
+                "bkz_combo_depth": 6 if aggressive else 5,
+                "bkz_combo_coeff_max": 2,
+                "cvp_lift_variants": 0,
+                "modular_pull_variants": max(2, cfg.modular_pull_variants),
+                "kernel_walk_every": cfg.kernel_walk_every if cfg.kernel_walk_every > 0 else 20,
+                "kernel_max_basis": max(cfg.kernel_max_basis, 32),
+                "euclid_weight": 0.5,
+                "entropy_weight": min(cfg.entropy_weight, 0.15) if cfg.entropy_weight > 0 else 0.0,
+                "residual_phase_end": 0.40,
+                "kernel_phase_start": 0.55,
+            }
+        )
+    if sis_class == 2:
+        cvp = 14 if aggressive else 10
+        pull = 10 if aggressive else 8
+        return SearchConfig(
+            **{
+                **asdict(cfg),
+                "use_bkz_seeds": False,
+                "bkz_beta": 0,
+                "bkz_combo_depth": 0,
+                "cvp_lift_variants": max(cvp, cfg.cvp_lift_variants),
+                "modular_pull_variants": max(pull, cfg.modular_pull_variants),
+                "use_pull_kick": True,
+                "pull_kick_gain": max(1.5, cfg.pull_kick_gain),
+                "euclid_weight": 0.6,
+                "entropy_weight": min(cfg.entropy_weight, 0.2) if cfg.entropy_weight > 0 else 0.0,
+                "residual_phase_end": 0.55,
+                "kernel_phase_start": 0.70,
+                "cp_periodic_every": cfg.cp_periodic_every if cfg.cp_periodic_every > 0 else 80,
+                "block_cp_every": cfg.block_cp_every if cfg.block_cp_every > 0 else 55,
+            }
+        )
+    euclid = 4.0 if aggressive else 3.0
+    return SearchConfig(
+        **{
+            **asdict(cfg),
+            "use_bkz_seeds": True,
+            "bkz_beta": 28 if aggressive else 24,
+            "bkz_max_vectors": 32 if aggressive else 24,
+            "bkz_max_dim": 160,
+            "bkz_combo_depth": 5 if aggressive else 4,
+            "bkz_combo_coeff_max": 2,
+            "cvp_lift_variants": 0,
+            "euclid_weight": max(euclid, cfg.euclid_weight),
+            "entropy_weight": max(0.45, cfg.entropy_weight) if cfg.entropy_weight > 0 else 0.45,
+            "entropy_disable_after_progress": 0.55,
+            "kernel_walk_every": cfg.kernel_walk_every if cfg.kernel_walk_every > 0 else 22,
+            "kernel_max_basis": max(cfg.kernel_max_basis, 36),
+            "residual_phase_end": 0.30,
+            "kernel_phase_start": 0.45,
+            "block_cp_every": cfg.block_cp_every if cfg.block_cp_every > 0 else 50,
+            "block_cp_time_limit": max(3.0, cfg.block_cp_time_limit),
+        }
+    )
 
 
 def score_key(score: Tuple[int, int, int]) -> Tuple[int, int, int]:
@@ -346,6 +417,10 @@ def build_dual_space_candidates(
             candidates.append(pv.copy())
     for pv in modular_pull_seed_vectors(A, t, q, gamma, rng, cfg.modular_pull_variants):
         candidates.append(pv.copy())
+    homogeneous = bool(np.all(np.mod(t, q) == 0))
+    if not homogeneous and cfg.cvp_lift_variants > 0:
+        for pv in cvp_lift_seed_vectors(A, t, q, gamma, rng, cfg.cvp_lift_variants):
+            candidates.append(pv.copy())
     candidates.append(np.zeros(m, dtype=np.int64))
 
     # Heuristic "lattice-space-like" projection seeds.
@@ -425,6 +500,62 @@ def modular_pull_seed_vectors(
         if key not in seen:
             seen.add(key)
             out.append(seed_vec.copy())
+    return out
+
+
+def cvp_lift_seed_vectors(
+    A: np.ndarray,
+    t: np.ndarray,
+    q: int,
+    gamma: int,
+    rng: np.random.Generator,
+    variants: int,
+) -> List[np.ndarray]:
+    """
+    Non-homogeneous SIS viewed as approximate CVP:
+      find short (u, v) with A v + u = t + q k.
+    Build candidate v by solving least squares on lifted targets t + q*k for a few structured k.
+    """
+    if variants <= 0:
+        return []
+    n, m = A.shape
+    tc = center_mod(t, q).astype(np.int64)
+    seen: set[bytes] = set()
+    out: List[np.ndarray] = []
+
+    # Deterministic structured lift directions for k.
+    k_base = [
+        np.zeros(n, dtype=np.int64),
+        np.sign(tc).astype(np.int64),
+        -np.sign(tc).astype(np.int64),
+        np.where(tc > gamma, 1, np.where(tc < -gamma, -1, 0)).astype(np.int64),
+    ]
+    # A few randomized sparse lift vectors.
+    extra = max(0, variants - len(k_base))
+    for _ in range(extra):
+        kk = np.zeros(n, dtype=np.int64)
+        s = max(1, n // 10)
+        idx = rng.choice(n, size=s, replace=False)
+        kk[idx] = rng.choice(np.array([-1, 1], dtype=np.int64), size=s, replace=True)
+        k_base.append(kk)
+
+    # Solve A v ≈ t + q*k in R, then clip to box.
+    A_f = A.astype(np.float64)
+    for kk in k_base[:variants]:
+        y = (tc + q * kk).astype(np.float64)
+        try:
+            v_real, *_ = np.linalg.lstsq(A_f, y, rcond=1e-8)
+        except Exception:
+            continue
+        for scale in (1.0, 0.75, 0.5):
+            v = np.rint(v_real * scale).astype(np.int64)
+            v = np.clip(v, -gamma, gamma)
+            key = v.tobytes()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(v.copy())
+
     return out
 
 
@@ -1325,6 +1456,8 @@ def local_search_one(
                 cfg.bkz_beta,
                 cfg.bkz_max_vectors,
                 cfg.bkz_max_dim,
+                combo_depth=cfg.bkz_combo_depth,
+                combo_coeff_max=cfg.bkz_combo_coeff_max,
             )
         except Exception:
             lattice_prepend = []
@@ -1510,64 +1643,20 @@ def solve_instances(instances: List[Dict], cfg: SearchConfig) -> List[Dict]:
         gamma = int(inst["gamma"])
         A = np.array(inst["A"], dtype=np.int64)
         t = np.array(inst["t"], dtype=np.int64)
-        require_norm_ge_q2 = bool(inst.get("require_norm_ge_q2", False))
+        try:
+            from sis_problem_taxonomy import (
+                effective_require_norm_ge_q2,
+                problem_class_from_instance,
+            )
 
-        local_cfg = SearchConfig(
-            restarts=cfg.restarts,
-            iters=cfg.iters,
-            delta=cfg.delta,
-            kick_size=cfg.kick_size,
-            kick_every=cfg.kick_every,
-            seed=seed_base + idx,
-            max_delta=cfg.max_delta,
-            candidate_count=cfg.candidate_count,
-            entropy_weight=cfg.entropy_weight,
-            euclid_weight=cfg.euclid_weight,
-            overflow_weight=cfg.overflow_weight,
-            entropy_bins=cfg.entropy_bins,
-            dynamic_schedule=cfg.dynamic_schedule,
-            use_dual_space=cfg.use_dual_space,
-            entropy_update_interval=cfg.entropy_update_interval,
-            verbose=cfg.verbose,
-            log_every=cfg.log_every,
-            timeout_sec=cfg.timeout_sec,
-            use_bkz_seeds=cfg.use_bkz_seeds,
-            bkz_beta=cfg.bkz_beta,
-            bkz_max_vectors=cfg.bkz_max_vectors,
-            bkz_max_dim=cfg.bkz_max_dim,
-            parallel_workers=cfg.parallel_workers,
-            modular_pull_variants=cfg.modular_pull_variants,
-            pair_relief_every=cfg.pair_relief_every,
-            pair_relief_attempts=cfg.pair_relief_attempts,
-            pair_relief_radius=cfg.pair_relief_radius,
-            use_pull_kick=cfg.use_pull_kick,
-            pull_kick_gain=cfg.pull_kick_gain,
-            cheby_weight=cfg.cheby_weight,
-            cheby_boost_threshold=cfg.cheby_boost_threshold,
-            cheby_boost_factor=cfg.cheby_boost_factor,
-            cp_repair_threshold=cfg.cp_repair_threshold,
-            cp_repair_window=cfg.cp_repair_window,
-            cp_repair_time_limit=cfg.cp_repair_time_limit,
-            kernel_walk_every=cfg.kernel_walk_every,
-            kernel_coeff_max=cfg.kernel_coeff_max,
-            kernel_max_basis=cfg.kernel_max_basis,
-            ls_project_every=cfg.ls_project_every,
-            ls_top_rows=cfg.ls_top_rows,
-            ls_top_cols=cfg.ls_top_cols,
-            energy_topk=cfg.energy_topk,
-            energy_topk_weight=cfg.energy_topk_weight,
-            entropy_disable_after_progress=cfg.entropy_disable_after_progress,
-            cp_periodic_every=cfg.cp_periodic_every,
-            cp_periodic_cols=cfg.cp_periodic_cols,
-            block_cp_every=cfg.block_cp_every,
-            block_cp_rows=cfg.block_cp_rows,
-            block_cp_cols=cfg.block_cp_cols,
-            block_cp_window=cfg.block_cp_window,
-            block_cp_time_limit=cfg.block_cp_time_limit,
-            residual_phase_end=cfg.residual_phase_end,
-            kernel_phase_start=cfg.kernel_phase_start,
-            allow_uphill_sa=cfg.allow_uphill_sa,
-        )
+            sis_class = problem_class_from_instance(inst)
+            require_norm_ge_q2 = effective_require_norm_ge_q2(inst, sis_class)
+            local_cfg = apply_sis_class_defaults(cfg, sis_class)
+        except Exception:
+            sis_class = 0
+            require_norm_ge_q2 = bool(inst.get("require_norm_ge_q2", False))
+            local_cfg = cfg
+        local_cfg = replace(local_cfg, seed=seed_base + idx)
         t0 = time.time()
         u, v, meta = local_search_one(
             A=A,
@@ -1643,6 +1732,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4,
         help="Number of modular-pull candidate seeds (0 disables).",
+    )
+    p.add_argument(
+        "--cvp-lift-variants",
+        type=int,
+        default=6,
+        help="Number of CVP lifting seed variants from t+qk (0 disables).",
     )
     p.add_argument("--pair-relief-every", type=int, default=32, help="0 disables 2-coordinate joint search.")
     p.add_argument("--pair-relief-attempts", type=int, default=12)
@@ -1725,6 +1820,7 @@ def main() -> None:
         bkz_max_dim=max(8, int(args.bkz_max_dim)),
         parallel_workers=max(1, int(args.parallel_workers)),
         modular_pull_variants=max(0, int(args.modular_pull_variants)),
+        cvp_lift_variants=max(0, int(args.cvp_lift_variants)),
         pair_relief_every=max(0, int(args.pair_relief_every)),
         pair_relief_attempts=max(1, int(args.pair_relief_attempts)),
         pair_relief_radius=max(1, int(args.pair_relief_radius)),

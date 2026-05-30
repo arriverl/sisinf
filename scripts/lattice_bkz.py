@@ -15,9 +15,30 @@ returns an empty list (solver falls back to heuristic dual-space seeds only).
 
 from __future__ import annotations
 
+import itertools
 from typing import List
 
 import numpy as np
+
+
+def _append_clipped_v(
+    out: List[np.ndarray],
+    seen: set,
+    v_part: np.ndarray,
+    gamma: int,
+    max_vectors: int,
+) -> bool:
+    """Append ±clip(v); return True if at capacity."""
+    for cand in (v_part, -v_part):
+        clip = np.clip(cand, -gamma, gamma).astype(np.int64, copy=False)
+        key = clip.tobytes()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clip.copy())
+        if len(out) >= max_vectors:
+            return True
+    return False
 
 
 def collect_bkz_v_seeds(
@@ -27,6 +48,8 @@ def collect_bkz_v_seeds(
     beta: int,
     max_vectors: int,
     max_dim: int,
+    combo_depth: int = 0,
+    combo_coeff_max: int = 2,
 ) -> List[np.ndarray]:
     if beta <= 0 or max_vectors <= 0:
         return []
@@ -66,17 +89,26 @@ def collect_bkz_v_seeds(
 
     out: List[np.ndarray] = []
     seen: set = set()
-    for j in range(d):
+    basis_vs: List[np.ndarray] = []
+    take = d if combo_depth <= 0 else min(d, max(1, combo_depth))
+    for j in range(take):
         v_part = np.empty(m, dtype=np.int64)
         for k in range(m):
             v_part[k] = int(M[n + k, j])
-        for cand in (v_part, -v_part):
-            clip = np.clip(cand, -gamma, gamma).astype(np.int64, copy=False)
-            key = clip.tobytes()
-            if key in seen:
+        basis_vs.append(v_part.copy())
+        if _append_clipped_v(out, seen, v_part, gamma, max_vectors):
+            return out
+
+    if combo_depth > 0 and len(basis_vs) >= 2:
+        coeffs_range = range(-int(combo_coeff_max), int(combo_coeff_max) + 1)
+        k = len(basis_vs)
+        for coeffs in itertools.product(coeffs_range, repeat=k):
+            if all(c == 0 for c in coeffs):
                 continue
-            seen.add(key)
-            out.append(clip.copy())
-            if len(out) >= max_vectors:
+            combo = np.zeros(m, dtype=np.int64)
+            for c, bv in zip(coeffs, basis_vs):
+                if c:
+                    combo += int(c) * bv
+            if _append_clipped_v(out, seen, combo, gamma, max_vectors):
                 return out
     return out

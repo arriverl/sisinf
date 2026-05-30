@@ -6,7 +6,8 @@ from typing import Any, Dict
 
 import numpy as np
 
-from solve_sisinf import SearchConfig, local_search_one, verify_solution
+from sis_problem_taxonomy import effective_require_norm_ge_q2, problem_class_from_id
+from solve_sisinf import SearchConfig, apply_sis_class_defaults, local_search_one, verify_solution
 
 
 def _load_one(path: str) -> Dict[str, Any]:
@@ -26,7 +27,7 @@ def _cfg_for_round(round_idx: int, seed: int) -> SearchConfig:
             restarts=16,
             iters=6000,
             seed=seed,
-            parallel_workers=4,
+            parallel_workers=1,
             timeout_sec=360.0,
             kernel_walk_every=20,
             kernel_max_basis=32,
@@ -51,7 +52,7 @@ def _cfg_for_round(round_idx: int, seed: int) -> SearchConfig:
             restarts=20,
             iters=8000,
             seed=seed,
-            parallel_workers=4,
+            parallel_workers=1,
             timeout_sec=520.0,
             kernel_walk_every=18,
             kernel_max_basis=36,
@@ -76,7 +77,7 @@ def _cfg_for_round(round_idx: int, seed: int) -> SearchConfig:
         restarts=24,
         iters=10000,
         seed=seed,
-        parallel_workers=4,
+        parallel_workers=1,
         timeout_sec=680.0,
         kernel_walk_every=16,
         kernel_max_basis=40,
@@ -113,7 +114,9 @@ def main() -> None:
     t = np.array(inst["t"], dtype=np.int64)
     q = int(inst["q"])
     gamma = int(inst["gamma"])
-    require_norm_ge_q2 = bool(inst.get("require_norm_ge_q2", False))
+    pid = int(inst.get("id", 1))
+    sis_class = problem_class_from_id(pid)
+    require_norm_ge_q2 = effective_require_norm_ge_q2(inst, sis_class)
 
     best_rec: Dict[str, Any] = {}
     round_idx = 0
@@ -122,7 +125,9 @@ def main() -> None:
         if args.max_rounds > 0 and round_idx >= args.max_rounds:
             break
         seed = int(args.seed + round_idx * 100003)
-        cfg = _cfg_for_round(round_idx, seed)
+        cfg = apply_sis_class_defaults(
+            _cfg_for_round(round_idx, seed), sis_class, aggressive=round_idx >= 8
+        )
         u, v, meta = local_search_one(A, t, q, gamma, cfg, require_norm_ge_q2)
         ok, verify = verify_solution(A, t, q, gamma, u, v, require_norm_ge_q2)
         rec = {
