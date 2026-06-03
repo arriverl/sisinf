@@ -1,3 +1,9 @@
+"""
+将赛题原始 txt（含 ``A=...``、``t=...`` 段落）批量转为官方 JSON 列表格式。
+
+用于数据预处理，不参与求解。输出字段含 id, A, t, q, gamma 等。
+"""
+
 import argparse
 import ast
 import json
@@ -7,6 +13,7 @@ from typing import Dict, List, Tuple
 
 
 def parse_txt_case(text: str) -> Tuple[List[List[int]], List[int]]:
+    """从单文件文本正则提取 A 与 t 的 Python 字面量列表。"""
     a_match = re.search(r"A\s*=\s*(\[[\s\S]*?\])\s*t\s*=", text)
     t_match = re.search(r"t\s*=\s*(\[[\s\S]*\])\s*$", text)
     if not a_match or not t_match:

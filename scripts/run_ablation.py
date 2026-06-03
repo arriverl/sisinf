@@ -1,3 +1,9 @@
+"""
+消融实验：对比 baseline / dual_space / BKZ / 完整配置等在相同实例上的成功率与耗时。
+
+输出 CSV/JSON 报告，用于调参而非提交答案。
+"""
+
 import argparse
 import csv
 import json
@@ -9,6 +15,7 @@ from solve_sisinf import SearchConfig, solve_instances
 
 
 def build_variants(base: SearchConfig) -> Dict[str, SearchConfig]:
+    """预定义若干 SearchConfig 变体名称 → 配置，用于横向对比。"""
     return {
         "baseline_iir_cls": SearchConfig(
             restarts=base.restarts,

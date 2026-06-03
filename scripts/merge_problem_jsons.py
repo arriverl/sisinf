@@ -1,3 +1,9 @@
+"""
+合并 ``problem1.json`` … ``problemN.json`` 为单个 ``instances_all.json``。
+
+供 ``solve_sisinf.py --input`` 一次性跑多题时使用。
+"""
+
 import argparse
 import json
 from pathlib import Path
@@ -5,6 +11,7 @@ from typing import List, Dict, Any
 
 
 def load_instances_from_file(path: Path) -> List[Dict[str, Any]]:
+    """单文件可为 list 或单个 dict 实例。"""
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, list):
         return data

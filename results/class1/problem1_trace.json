@@ -1,0 +1,159 @@
+{
+  "problem_id": 1,
+  "class": 1,
+  "class_label": "homogeneous/SVP",
+  "timestamp": "2026-05-30T18:14:05",
+  "instance": {
+    "n": 100,
+    "m": 100,
+    "q": 100,
+    "gamma": 15,
+    "homogeneous": true,
+    "require_norm_ge_q2": false
+  },
+  "framework": "Dual-Space + Entropy IIR-CLS（第一类叠加 SVP/BKZ + kernel walk）",
+  "phases": [
+    {
+      "name": "0_建模",
+      "description": "残差 r(v)=Center(t-Av)；u=r(v)；在 v∈[-γ,γ]^m 上使 |r|_∞≤γ；齐次须 u,v 非全零",
+      "residual_at_v0": {
+        "violations": 0,
+        "overflow_sum": 0,
+        "max_overflow": 0,
+        "inf_u": 0,
+        "inf_v": 0
+      }
+    },
+    {
+      "name": "1_BKZ格种子",
+      "enabled": true,
+      "seeds": 0,
+      "beta": 28,
+      "combo_depth": 5,
+      "elapsed_sec": 0.0
+    },
+    {
+      "name": "2_模q核",
+      "dim_m": 100,
+      "basis_cols": 3,
+      "kernel_walk_every": 20,
+      "elapsed_sec": 2.768
+    },
+    {
+      "name": "3_Dual空间候选",
+      "num_candidates": 24,
+      "top_scored_preview": [
+        {
+          "violations": 0,
+          "overflow_sum": 0,
+          "max_overflow": 0,
+          "inf_v": 0
+        },
+        {
+          "violations": 67,
+          "overflow_sum": 1138,
+          "max_overflow": 33,
+          "inf_v": 15
+        },
+        {
+          "violations": 71,
+          "overflow_sum": 1230,
+          "max_overflow": 34,
+          "inf_v": 15
+        },
+        {
+          "violations": 72,
+          "overflow_sum": 1193,
+          "max_overflow": 34,
+          "inf_v": 15
+        },
+        {
+          "violations": 72,
+          "overflow_sum": 1289,
+          "max_overflow": 34,
+          "inf_v": 15
+        },
+        {
+          "violations": 59,
+          "overflow_sum": 1115,
+          "max_overflow": 35,
+          "inf_v": 15
+        },
+        {
+          "violations": 60,
+          "overflow_sum": 1135,
+          "max_overflow": 35,
+          "inf_v": 15
+        },
+        {
+          "violations": 63,
+          "overflow_sum": 1125,
+          "max_overflow": 35,
+          "inf_v": 15
+        }
+      ],
+      "elapsed_sec": 0.306
+    },
+    {
+      "name": "4_配置摘要",
+      "restarts": 16,
+      "iters": 6000,
+      "timeout_sec": 360.0,
+      "bkz_beta": 28,
+      "kernel_walk_every": 20,
+      "pair_relief_every": 24,
+      "block_cp_every": 80,
+      "euclid_weight": 0.5,
+      "entropy_weight": 0.15
+    },
+    {
+      "name": "5_局部搜索",
+      "elapsed_sec": 5778.762,
+      "success": false,
+      "verify": {
+        "congruence_ok": 1,
+        "inf_u": 43,
+        "inf_v": 15,
+        "norm_sq": 78873,
+        "norm_req_ok": 1,
+        "nontrivial_ok": 1
+      },
+      "meta": {
+        "restart": 2,
+        "steps": 6000,
+        "violations": 64,
+        "overflow_sum": 1049,
+        "max_overflow": 28,
+        "feasible": 0,
+        "congruence_ok": 1,
+        "inf_u": 43,
+        "inf_v": 15,
+        "norm_sq": 78873,
+        "norm_req_ok": 1,
+        "nontrivial_ok": 1,
+        "energy": 64002185.314539716,
+        "entropy": 3.272803804040776,
+        "dual_candidates": 24
+      },
+      "final_residual_stats": {
+        "violations": 64,
+        "overflow_sum": 1049,
+        "max_overflow": 28,
+        "inf_u": 43,
+        "inf_v": 15
+      }
+    }
+  ],
+  "summary": {
+    "success": false,
+    "verify": {
+      "congruence_ok": 1,
+      "inf_u": 43,
+      "inf_v": 15,
+      "norm_sq": 78873,
+      "norm_req_ok": 1,
+      "nontrivial_ok": 1
+    },
+    "total_elapsed_sec": 11560.597999999998
+  }
+}

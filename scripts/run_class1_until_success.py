@@ -1,4 +1,17 @@
-"""循环求解第一类题（1、3、6、9）直至可行或达到轮次上限。"""
+"""
+循环求解第一类题（齐次 SIS，官方题号 1、3、6、9）直至可行或达到轮次上限。
+
+与 ``run_class_batch.py --class 1`` 类似，但：
+- 默认题号 ``1,3,6,9``；
+- 默认输出目录 ``results/class1``；
+- 摘要写入 ``summary.json``（非 batch_report.json）；
+- 未可行时以 inf_u+inf_v 保留较优进展。
+
+用法
+----
+  cd sisinf_challenge2026
+  python scripts/run_class1_until_success.py --max-rounds 12
+"""
 
 import argparse
 import json

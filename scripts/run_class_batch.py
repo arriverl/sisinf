@@ -1,4 +1,20 @@
-"""按类别批量求解 SIS∞ 小题，输出每题最优进展与可行解。"""
+"""
+按赛题类别（1/2/3）批量求解 SIS∞ 小题。
+
+流程
+----
+1. 根据 ``--class`` 选择题号集合（可用 ``--problems`` 覆盖）；
+2. 从 ``saiti1/sis_inf_problems_json/problemN.json`` 加载实例；
+3. 每题多轮调用 ``local_search_one``，轮次参数来自 ``_cfg_for_round`` +
+   ``apply_sis_class_defaults``；
+4. 每轮写入 ``results/classN/problem{id}_latest.json``；
+5. 首次 ``verify_solution`` 通过则写入 ``problem{id}_solution.json``；
+6. 汇总 ``batch_report.json``（含 solved/total/all_success）。
+
+与 ``run_class1_until_success.py`` 的区别
+---------------------------------------
+本脚本统一处理三类；class1 专用脚本仅 1/3/6/9 且摘要格式略简。
+"""
 
 from __future__ import annotations
 
@@ -26,6 +42,7 @@ from sis_problem_taxonomy import (
 )
 from solve_sisinf import apply_sis_class_defaults, local_search_one, verify_solution
 
+# 类别 → 官方题号
 CLASS_TO_IDS: Dict[int, Set[int]] = {
     1: CLASS_1_IDS,
     2: CLASS_2_IDS,
@@ -34,6 +51,7 @@ CLASS_TO_IDS: Dict[int, Set[int]] = {
 
 
 def _load(path: str) -> Dict[str, Any]:
+    """读取 JSON；官方格式为单元素列表 ``[{...}]``。"""
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, list):
@@ -42,6 +60,9 @@ def _load(path: str) -> Dict[str, Any]:
 
 
 def _quick_cfg_patch(cfg, quick: bool):
+    """
+    ``--quick`` 模式：减半 restarts、缩短 iters/timeout，用于快速筛查而非冲解。
+    """
     if not quick:
         return cfg
     from dataclasses import replace
@@ -56,6 +77,11 @@ def _quick_cfg_patch(cfg, quick: bool):
 
 
 def _better(verify: Dict[str, int], prev: Dict[str, int]) -> bool:
+    """
+    比较两轮 verify 字典，判断当前是否更优（未可行时保留最佳进展）。
+
+    优先级：同余成立 > L∞ 更小 > norm_sq 更大（第三类欧氏下界方向）。
+    """
     if not prev:
         return True
     key = (
@@ -81,6 +107,14 @@ def solve_one(
     max_rounds: int,
     quick: bool,
 ) -> Dict[str, Any]:
+    """
+    单题循环求解直至可行或耗尽 ``max_rounds``（0 表示无限）。
+
+    Returns
+    -------
+    dict
+        含 success、verify、rounds_tried、elapsed_sec 等；可行时无 u/v 在 best 中省略。
+    """
     A = np.array(inst["A"], dtype=np.int64)
     t = np.array(inst["t"], dtype=np.int64)
     q, gamma = int(inst["q"]), int(inst["gamma"])
@@ -145,9 +179,14 @@ def solve_one(
 
 
 def main() -> None:
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description="Batch solve SIS∞ by taxonomy class (1/2/3).")
     p.add_argument("--class", dest="sis_class", type=int, required=True, choices=[1, 2, 3])
-    p.add_argument("--json-dir", default=os.path.join("saiti1", "sis_inf_problems_json"))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p.add_argument(
+        "--json-dir",
+        default=os.path.join(root, "saiti1", "sis_inf_problems_json"),
+        help="Directory with problemN.json (default: <project>/saiti1/sis_inf_problems_json)",
+    )
     p.add_argument("--output-dir", default="")
     p.add_argument("--problems", default="", help="Override ids, e.g. 1,3,6,9")
     p.add_argument("--seed", type=int, default=424242)
@@ -165,7 +204,7 @@ def main() -> None:
         if pid not in CLASS_TO_IDS[cls]:
             raise SystemExit(f"problem {pid} not in class {cls}")
 
-    out_dir = args.output_dir or os.path.join("results", f"class{cls}")
+    out_dir = args.output_dir or os.path.join(root, "results", f"class{cls}")
     os.makedirs(out_dir, exist_ok=True)
 
     summary: List[Dict[str, Any]] = []

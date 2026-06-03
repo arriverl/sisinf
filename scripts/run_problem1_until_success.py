@@ -1,3 +1,21 @@
+"""
+单题（或多题 JSON 列表首项）循环求解，直至 ``verify_solution`` 通过。
+
+典型用法
+--------
+  python scripts/run_problem1_until_success.py \\
+    --input saiti1/sis_inf_problems_json/problem1.json \\
+    --output results/solutions_problem1.json \\
+    --checkpoint results/problem1_progress.json
+
+说明
+----
+- 虽名为 problem1，但 ``--input`` 可为任意官方 JSON；题号 ``id`` 决定 sis_class。
+- 每轮 seed 递增，``_cfg_for_round`` 随轮次加强 CP 块修复与 timeout。
+- ``apply_sis_class_defaults`` 按 1/2/3 类覆盖 BKZ/CVP/欧氏权重等。
+- ``--max-rounds 0`` 表示无限循环（生产环境慎用）。
+"""
+
 import argparse
 import json
 import os
@@ -11,6 +29,7 @@ from solve_sisinf import SearchConfig, apply_sis_class_defaults, local_search_on
 
 
 def _load_one(path: str) -> Dict[str, Any]:
+    """官方格式：JSON 文件为含一个实例的列表 ``[{A,t,q,gamma,...}]``。"""
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, list):
@@ -21,7 +40,12 @@ def _load_one(path: str) -> Dict[str, Any]:
 
 
 def _cfg_for_round(round_idx: int, seed: int) -> SearchConfig:
-    # Progressive schedule: strengthen exact block repair over time.
+    """
+    渐进式搜索配置：轮次越高，restarts/iters/CP 窗口越大。
+
+    分三档：round < 8、< 20、否则（最强）。
+    被 ``run_class_batch`` 与 ``run_class1_until_success`` 复用。
+    """
     if round_idx < 8:
         return SearchConfig(
             restarts=16,
@@ -101,9 +125,9 @@ def _cfg_for_round(round_idx: int, seed: int) -> SearchConfig:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Repeat problem1 solving until feasible.")
+    p = argparse.ArgumentParser(description="Repeat solving one instance until feasible.")
     p.add_argument("--input", required=True)
-    p.add_argument("--output", required=True)
+    p.add_argument("--output", default="results/problem1_best.json")
     p.add_argument("--checkpoint", default="results/problem1_progress.json")
     p.add_argument("--seed", type=int, default=424242)
     p.add_argument("--max-rounds", type=int, default=0, help="0 means infinite")
@@ -140,9 +164,11 @@ def main() -> None:
             "v": v.tolist(),
             "elapsed_total_sec": time.time() - t0,
         }
+        os.makedirs(os.path.dirname(args.checkpoint) or ".", exist_ok=True)
         with open(args.checkpoint, "w", encoding="utf-8") as f:
             json.dump(rec, f, ensure_ascii=False, indent=2)
 
+        # 以 meta 中 overflow 指标保留历史最优（未必已 verify 可行）
         better = False
         if not best_rec:
             better = True
@@ -160,6 +186,7 @@ def main() -> None:
             better = cur_key < best_key
         if better:
             best_rec = rec
+            os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
             with open(args.output, "w", encoding="utf-8") as f:
                 json.dump(
                     {"summary": {"success": bool(ok), "round": round_idx}, "result": rec},
@@ -188,4 +215,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

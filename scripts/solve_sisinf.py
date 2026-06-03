@@ -1,3 +1,32 @@
+"""
+SIS∞ 2026 赛题一 — 主求解器（多 restart 局部搜索 + 格种子 + CP-SAT）。
+
+问题
+----
+求 ``u ∈ Z^n``, ``v ∈ Z^m`` 使得 ``A v + u ≡ t (mod q)``，
+且 ``|u|_∞, |v|_∞ ≤ γ``。第三类题另需 ``||u||_2^2 + ||v||_2^2 ≥ q^2``；
+齐次 ``t≡0`` 时拒绝平凡解 ``u=v=0``。
+
+核心变量
+--------
+- ``residual = center_mod(t - A v, q)`` 即同余意义下的 ``u``；
+- 内层主要优化 ``v``，``u`` 由 residual 导出。
+
+主要模块
+--------
+- ``SearchConfig`` / ``apply_sis_class_defaults``：搜索与三类题默认参数
+- ``build_dual_space_candidates``：dual / pull / CVP / 随机盒种子
+- ``lattice_bkz.collect_bkz_v_seeds``：第一类 BKZ 短向量种子（可选）
+- ``modq_kernel``：kernel walk 的模 q 核基
+- ``_single_restart_inner``：单 restart 主循环（坐标下降、CP、kernel、LS）
+- ``local_search_one``：多 restart 编排（可 ProcessPool 并行）
+- ``verify_solution``：与赛题一致的可行性校验
+
+参见 ``sis_problem_taxonomy.py``、``run_class_batch.py``。
+"""
+
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -18,79 +47,105 @@ from modq_kernel import in_kernel_mod_q, right_kernel_basis_mod_q
 
 @dataclass
 class SearchConfig:
-    restarts: int = 40
-    iters: int = 2500
-    delta: int = 2
-    kick_size: int = 6
-    kick_every: int = 120
-    seed: int = 2026
-    max_delta: int = 6
-    candidate_count: int = 24
-    entropy_weight: float = 0.25
-    euclid_weight: float = 1.5
-    overflow_weight: float = 1.0
-    entropy_bins: int = 8
-    dynamic_schedule: bool = True
-    use_dual_space: bool = True
-    # Hot-path tuning (phase 1)
-    entropy_update_interval: int = 50
+    """
+    局部搜索超参数。字段默认值偏通用；三类题由 ``apply_sis_class_defaults`` 覆盖。
+
+    调参提示：第一类加大 ``bkz_*`` / ``kernel_*``；第二类加大 ``cvp_lift_*`` /
+    ``modular_pull_*`` 并关 BKZ；第三类加大 ``euclid_weight`` / ``entropy_weight``。
+    """
+
+    # --- 基础循环 ---
+    restarts: int = 40  # 独立初值 restart 次数
+    iters: int = 2500  # 每个 restart 内最大迭代步数
+    delta: int = 2  # 单坐标扰动半径（±delta）
+    kick_size: int = 6  # 停滞 kick 时随机翻转坐标个数
+    kick_every: int = 120  # 每多少步尝试一次 kick；0 关闭
+    seed: int = 2026  # 全局 RNG 种子
+    max_delta: int = 6  # 自适应步长上界
+    candidate_count: int = 24  # dual-space 保留的 v 种子数
+    parallel_workers: int = 1  # restart 并行进程数（Windows 建议 1）
+    timeout_sec: Optional[float] = None  # 单 restart 墙钟超时（秒），None 不限
     verbose: bool = False
     log_every: int = 500
-    timeout_sec: Optional[float] = None
-    # Lattice seeds (optional fpylll) + parallel restarts
+
+    # --- 目标与能量（Chebyshev 优先 + 欧氏/熵次要）---
+    entropy_weight: float = 0.25  # 分布熵奖励权重（越大越鼓励“铺开”坐标）
+    euclid_weight: float = 1.5  # 欧氏下界缺口惩罚（第三类关键）
+    overflow_weight: float = 1.0  # L∞ 溢出量和权重
+    entropy_bins: int = 8  # 熵直方图分箱
+    dynamic_schedule: bool = True  # 是否随 progress 缩放 euclid/entropy 权重
+    entropy_update_interval: int = 50  # 熵计算间隔（步），降低直方图开销
+    entropy_disable_after_progress: float = 0.78  # progress 超过此值停算熵；>=1 永不关
+    cheby_weight: float = 20.0  # 最大坐标溢出（Chebyshev）在能量中的权重
+    cheby_boost_threshold: int = 20
+    cheby_boost_factor: float = 2.0  # max_overflow 超阈值时放大 cheby_weight
+    energy_topk: int = 5  # 仅对 u 的前 k 大溢出求和惩罚；0 关
+    energy_topk_weight: float = 0.12
+
+    # --- 种子构造 ---
+    use_dual_space: bool = True  # 是否走完整 dual 候选管线
+    modular_pull_variants: int = 4  # 模拉回启发式种子数；0 关
+    cvp_lift_variants: int = 6  # 非齐次 CVP 提升种子；齐次题常置 0
     use_bkz_seeds: bool = True
-    bkz_beta: int = 0  # 0 disables BKZ; try e.g. 20–40 on moderate dimension
+    bkz_beta: int = 0  # BKZ 块大小；0 禁用
     bkz_max_vectors: int = 24
-    bkz_max_dim: int = 96  # skip BKZ when n+m exceeds this (cost guard)
-    bkz_combo_depth: int = 0  # enumerate small combos of first k reduced basis v-parts (class 1)
+    bkz_max_dim: int = 96  # n+m 超过则跳过 BKZ
+    bkz_combo_depth: int = 0  # 约化基前 k 列小整数组合（类 1）
     bkz_combo_coeff_max: int = 2
-    parallel_workers: int = 1
-    # 「残差–模」联动创新：拉回种子 + 双坐标救援 + 梯度踢
-    modular_pull_variants: int = 4  # 0 disables pull seeds in dual builder
-    cvp_lift_variants: int = 6  # non-homogeneous SIS -> CVP lifting seeds
-    pair_relief_every: int = 32  # 0 disables; periodic 2-coordinate joint moves
+
+    # --- 邻域算子 ---
+    pair_relief_every: int = 32  # 双坐标联合移动周期；0 关
     pair_relief_attempts: int = 12
     pair_relief_radius: int = 2
-    use_pull_kick: bool = True  # stagnation kick along A^T sign(residual)
+    use_pull_kick: bool = True  # 沿 A^T sign(residual) 的梯度踢
     pull_kick_gain: float = 1.25
-    # Chebyshev-focused scoring / energy
-    cheby_weight: float = 20.0
-    cheby_boost_threshold: int = 20
-    cheby_boost_factor: float = 2.0
-    # CP-SAT repair (optional, graceful fallback when ortools unavailable)
-    cp_repair_threshold: int = 8
-    cp_repair_window: int = 3
-    cp_repair_time_limit: float = 0.5
-    # Mod-q kernel walk: v <- v + d with (A @ d) % q == 0 ⇒ u unchanged (same residue class)
-    kernel_walk_every: int = 25  # 0 disables
-    kernel_coeff_max: int = 2
-    kernel_max_basis: int = 24
-    # Least-squares projection on worst rows/cols (continuous relax + round)
-    ls_project_every: int = 35  # 0 disables
+    kernel_walk_every: int = 25  # 模 q 核游走周期；0 关
+    kernel_coeff_max: int = 2  # 核基线性组合系数界
+    kernel_max_basis: int = 24  # 预计算核列数上界
+    ls_project_every: int = 35  # 最差行/列最小二乘投影；0 关
     ls_top_rows: int = 14
     ls_top_cols: int = 28
-    # Top-k overflow penalty in energy (u-only fast proxy in inner loops)
-    energy_topk: int = 5  # 0 disables
-    energy_topk_weight: float = 0.12
-    entropy_disable_after_progress: float = 0.78  # >=1.0: never disable by progress
-    # Periodic small CP-SAT on random column subset (0 = off)
-    cp_periodic_every: int = 0
+
+    # --- CP-SAT（需 ortools，缺失则静默跳过）---
+    cp_repair_threshold: int = 8  # 违规数 ≤ 此值时触发「近可行」精确 CP 修复
+    cp_repair_window: int = 3
+    cp_repair_time_limit: float = 0.5
+    cp_aggressive_every: int = 0  # >0：远可行时也周期 CP（针对 u 大量溢出）；0 关闭
+    cp_aggressive_row_k: int = 20
+    u_row_snap_every: int = 14  # 对最差 u 行做定向坐标枚举；0 关闭
+    u_row_snap_top_rows: int = 10
+    u_row_snap_cols: int = 16
+    # 文献驱动 u 优先扩展（见 sis_advanced_u_ops.py）
+    use_wagner_seeds: bool = False
+    wagner_rows: int = 8
+    wagner_cols: int = 16
+    wagner_box_radius: int = 2
+    wagner_list_cap: int = 600
+    use_violation_ls: bool = False
+    violation_ls_every: int = 12
+    violation_ls_top_rows: int = 6
+    violation_ls_top_cols: int = 8
+    use_layered_ls: bool = False
+    layered_ls_every: int = 40
+    gaussian_seed_sigma: float = 3.0
+    gaussian_on_stagnation: bool = False
+    cheap_lll_trials: int = 0
+    cp_periodic_every: int = 0  # 随机列子集周期 CP；0 关
     cp_periodic_cols: int = 16
-    # Periodic block CP-SAT optimization (reduce overflow even if not yet feasible)
-    block_cp_every: int = 0
+    block_cp_every: int = 0  # 块 CP 优化周期；0 关
     block_cp_rows: int = 20
     block_cp_cols: int = 28
     block_cp_window: int = 6
     block_cp_time_limit: float = 2.0
-    # Phase schedule: [0, residual_phase_end) focuses on residual feasibility,
-    # [residual_phase_end, kernel_phase_start) mixed, [kernel_phase_start, 1] enables stronger kernel/LNS.
-    residual_phase_end: float = 0.45
-    kernel_phase_start: float = 0.60
-    # Convergence-friendly acceptance: by default only accept non-worsening score-key moves.
-    allow_uphill_sa: bool = False
+
+    # --- 三阶段进度调度（progress ∈ [0,1]）---
+    residual_phase_end: float = 0.45  # 此前侧重同余/L∞ 可行
+    kernel_phase_start: float = 0.60  # 此后加强 kernel / 大邻域
+    allow_uphill_sa: bool = False  # 是否允许劣化 score_key 的模拟退火步
 
 
 def center_mod(x: np.ndarray, q: int) -> np.ndarray:
+    """对称取模到约 ``(-q/2, q/2]``，得到代表元（即算法中的 u / residual）。"""
     y = np.mod(x, q)
     half = q // 2
     y = np.where(y > half, y - q, y)
@@ -98,7 +153,14 @@ def center_mod(x: np.ndarray, q: int) -> np.ndarray:
 
 
 def objective_uv(residual: np.ndarray, v: np.ndarray, gamma: int) -> Tuple[int, int, int]:
-    """L_inf feasibility proxy for both u (residual) and v — matches verify_solution inf checks."""
+    """
+    L∞ 可行性的离散代理（与 ``verify_solution`` 的 inf 检查一致）。
+
+    Returns
+    -------
+    violations, overflow_sum, max_overflow
+        分别：超界坐标个数、溢出量总和、单坐标最大溢出。
+    """
     abs_r = np.abs(residual)
     abs_v = np.abs(v)
     ou = np.maximum(abs_r - gamma, 0)
@@ -119,7 +181,11 @@ def objective_uv_and_rr_sq(residual: np.ndarray, v: np.ndarray, gamma: int) -> T
 
 
 def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: bool = False) -> SearchConfig:
-    """按赛题类别叠加默认搜索参数（见 sis_problem_taxonomy.py）。"""
+    """
+    按赛题类别 1/2/3 叠加默认搜索参数（见 ``sis_problem_taxonomy.py``）。
+
+    aggressive=True 时进一步增大 BKZ β、CVP 变体、块 CP 时间等（长跑轮次用）。
+    """
     if sis_class == 1:
         beta = 32 if aggressive else 28
         return SearchConfig(
@@ -128,7 +194,7 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
                 "use_bkz_seeds": True,
                 "bkz_beta": beta,
                 "bkz_max_vectors": 32 if aggressive else 24,
-                "bkz_max_dim": 140 if aggressive else 120,
+                "bkz_max_dim": 220 if aggressive else 200,
                 "bkz_combo_depth": 6 if aggressive else 5,
                 "bkz_combo_coeff_max": 2,
                 "cvp_lift_variants": 0,
@@ -136,9 +202,40 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
                 "kernel_walk_every": cfg.kernel_walk_every if cfg.kernel_walk_every > 0 else 20,
                 "kernel_max_basis": max(cfg.kernel_max_basis, 32),
                 "euclid_weight": 0.5,
-                "entropy_weight": min(cfg.entropy_weight, 0.15) if cfg.entropy_weight > 0 else 0.0,
-                "residual_phase_end": 0.40,
-                "kernel_phase_start": 0.55,
+                "entropy_weight": 0.0,
+                "cheby_weight": max(cfg.cheby_weight, 48.0),
+                "energy_topk": max(cfg.energy_topk, 10),
+                "energy_topk_weight": max(cfg.energy_topk_weight, 0.22),
+                "max_delta": max(cfg.max_delta, 12),
+                "delta": max(cfg.delta, 3),
+                "modular_pull_variants": max(cfg.modular_pull_variants, 8),
+                "pull_kick_gain": max(cfg.pull_kick_gain, 2.2),
+                "cp_aggressive_every": cfg.cp_aggressive_every if cfg.cp_aggressive_every > 0 else (28 if aggressive else 36),
+                "cp_aggressive_row_k": max(cfg.cp_aggressive_row_k, 40 if aggressive else 32),
+                "cp_repair_window": max(cfg.cp_repair_window, 8 if aggressive else 6),
+                "cp_repair_time_limit": max(cfg.cp_repair_time_limit, 3.5 if aggressive else 2.5),
+                "block_cp_every": cfg.block_cp_every if cfg.block_cp_every > 0 else 40,
+                "block_cp_rows": max(cfg.block_cp_rows, 32),
+                "block_cp_cols": max(cfg.block_cp_cols, 40),
+                "block_cp_window": max(cfg.block_cp_window, 8),
+                "block_cp_time_limit": max(cfg.block_cp_time_limit, 3.5),
+                "u_row_snap_every": cfg.u_row_snap_every if cfg.u_row_snap_every > 0 else (6 if aggressive else 8),
+                "u_row_snap_top_rows": max(cfg.u_row_snap_top_rows, 20 if aggressive else 16),
+                "u_row_snap_cols": max(cfg.u_row_snap_cols, 32 if aggressive else 24),
+                "use_wagner_seeds": True,
+                "wagner_rows": max(cfg.wagner_rows, 10 if aggressive else 8),
+                "wagner_cols": max(cfg.wagner_cols, 20 if aggressive else 16),
+                "wagner_box_radius": max(cfg.wagner_box_radius, 3 if aggressive else 2),
+                "wagner_list_cap": max(cfg.wagner_list_cap, 800 if aggressive else 600),
+                "use_violation_ls": True,
+                "violation_ls_every": cfg.violation_ls_every if cfg.violation_ls_every > 0 else (8 if aggressive else 10),
+                "use_layered_ls": True,
+                "layered_ls_every": cfg.layered_ls_every if cfg.layered_ls_every > 0 else (32 if aggressive else 40),
+                "gaussian_on_stagnation": True,
+                "gaussian_seed_sigma": max(cfg.gaussian_seed_sigma, 4.0 if aggressive else 3.0),
+                "cheap_lll_trials": max(cfg.cheap_lll_trials, 50 if aggressive else 30),
+                "residual_phase_end": 0.58,
+                "kernel_phase_start": 0.78,
             }
         )
     if sis_class == 2:
@@ -377,6 +474,15 @@ def verify_solution(
     v: np.ndarray,
     require_norm_ge_q2: bool = False,
 ) -> Tuple[bool, Dict[str, int]]:
+    """
+    官方一致性校验：同余、L∞ 盒、可选欧氏下界、齐次非平凡。
+
+    Returns
+    -------
+    ok : bool
+    metrics : dict
+        congruence_ok, inf_u, inf_v, norm_sq, norm_req_ok, nontrivial_ok（0/1）
+    """
     lhs = (A @ v + u - t) % q
     congr_ok = bool(np.all(lhs == 0))
     inf_u = int(np.max(np.abs(u)))
@@ -407,6 +513,11 @@ def build_dual_space_candidates(
     rng: np.random.Generator,
     prepend: Optional[List[np.ndarray]] = None,
 ) -> Tuple[List[np.ndarray], Dict[str, int]]:
+    """
+    构造并排序 v 初值列表：prepend(BKZ) → modular_pull →（非齐次）cvp_lift → 投影/稀疏/随机。
+
+    齐次题（t≡0）不生成 CVP lift。按 score_key 保留前 ``candidate_count`` 个。
+    """
     _, m = A.shape
     candidates: List[np.ndarray] = []
     if prepend:
@@ -421,7 +532,8 @@ def build_dual_space_candidates(
     if not homogeneous and cfg.cvp_lift_variants > 0:
         for pv in cvp_lift_seed_vectors(A, t, q, gamma, rng, cfg.cvp_lift_variants):
             candidates.append(pv.copy())
-    candidates.append(np.zeros(m, dtype=np.int64))
+    if not homogeneous:
+        candidates.append(np.zeros(m, dtype=np.int64))
 
     # Heuristic "lattice-space-like" projection seeds.
     probe_count = max(4, cfg.candidate_count // 3)
@@ -442,6 +554,21 @@ def build_dual_space_candidates(
         v[idx] = signs
         candidates.append(v)
 
+    if homogeneous and cfg.gaussian_seed_sigma > 0:
+        try:
+            from sis_advanced_u_ops import discrete_gaussian_seeds
+
+            for gv in discrete_gaussian_seeds(
+                np.zeros(m, dtype=np.int64),
+                gamma,
+                rng,
+                n_seeds=max(4, cfg.candidate_count // 4),
+                sigma=cfg.gaussian_seed_sigma,
+            ):
+                candidates.append(gv)
+        except Exception:
+            pass
+
     # Random box candidates.
     while len(candidates) < cfg.candidate_count:
         v = rng.integers(low=-gamma, high=gamma + 1, size=m, dtype=np.int64)
@@ -456,6 +583,8 @@ def build_dual_space_candidates(
     # Score by residual feasibility proxy.
     scored = []
     for v in candidates:
+        if homogeneous and np.all(v == 0):
+            continue
         residual = center_mod(t - (A @ v), q)
         viol, overflow_sum, max_overflow = objective_uv(residual, v, gamma)
         scored.append((viol, overflow_sum, max_overflow, v))
@@ -473,7 +602,11 @@ def modular_pull_seed_vectors(
     rng: np.random.Generator,
     variants: int,
 ) -> List[np.ndarray]:
-    """Heuristic v seeds from modular residual geometry: -gamma * normalize(A.T @ phi(center(t)))."""
+    """
+    模拉回启发式：``v ≈ -γ · normalize(A^T φ(center(t)))``，φ 为多种残差形状。
+
+    不改变同余类，仅提供 L∞ 盒内的 v 起点（第一、二类均可用）。
+    """
     if variants <= 0:
         return []
     _, m = A.shape
@@ -512,9 +645,9 @@ def cvp_lift_seed_vectors(
     variants: int,
 ) -> List[np.ndarray]:
     """
-    Non-homogeneous SIS viewed as approximate CVP:
-      find short (u, v) with A v + u = t + q k.
-    Build candidate v by solving least squares on lifted targets t + q*k for a few structured k.
+    非齐次 SIS 的 CVP 视角：在若干提升 ``t + q·k`` 上对 ``A v ≈ target`` 做最小二乘，再裁剪到盒内。
+
+    仅用于 ``t ≢ 0``；齐次题应在 ``build_dual_space_candidates`` 中跳过。
     """
     if variants <= 0:
         return []
@@ -597,6 +730,31 @@ def pick_best_pair_move(
     return best_pack
 
 
+def u_priority_coord_order(
+    A: np.ndarray,
+    residual: np.ndarray,
+    gamma: int,
+    bad_v: np.ndarray,
+    worst_rows: np.ndarray,
+    m: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    u 优先坐标顺序：先处理与最差 u 行强相关的列，再处理 v 超界列，最后其余列。
+    """
+    if worst_rows.size > 0:
+        u_strength = np.sum(np.abs(A[worst_rows, :]), axis=0)
+        u_order = np.argsort(-u_strength)
+    else:
+        u_order = np.arange(m, dtype=np.int64)
+    if bad_v.size > 0:
+        bv_set = {int(x) for x in bad_v}
+        bv = rng.permutation(bad_v)
+        rest = np.array([int(j) for j in u_order if int(j) not in bv_set], dtype=np.int64)
+        return np.concatenate([bv, rest])
+    return u_order
+
+
 def pick_key_rows(abs_residual: np.ndarray, gamma: int, top_k: int) -> np.ndarray:
     overflow = np.maximum(abs_residual - gamma, 0)
     bad = np.flatnonzero(overflow > 0)
@@ -604,6 +762,53 @@ def pick_key_rows(abs_residual: np.ndarray, gamma: int, top_k: int) -> np.ndarra
         return np.array([], dtype=np.int64)
     order = np.argsort(-overflow[bad])
     return bad[order[: min(top_k, bad.size)]]
+
+
+def try_u_row_snap_move(
+    A: np.ndarray,
+    residual: np.ndarray,
+    v: np.ndarray,
+    cols: List[np.ndarray],
+    q: int,
+    gamma: int,
+    score: Tuple[int, int, int],
+    cfg: SearchConfig,
+    worst_rows: np.ndarray,
+    vv_sq: int,
+) -> Optional[Tuple[np.ndarray, np.ndarray, int, Tuple[int, int, int], float]]:
+    """针对 |u_i|>γ 的最差行，在强相关列上枚举 Δv_j，改善 u 的 L∞ 溢出。"""
+    if worst_rows.size == 0:
+        return None
+    _, m = A.shape
+    radius = max(cfg.delta, min(cfg.max_delta, gamma))
+    best_score = score
+    best_pack: Optional[Tuple[np.ndarray, np.ndarray, int, Tuple[int, int, int], float]] = None
+    for i in worst_rows:
+        row = A[int(i)]
+        col_order = np.argsort(-np.abs(row))[: min(cfg.u_row_snap_cols, m)]
+        for j in col_order:
+            if int(row[int(j)]) == 0:
+                continue
+            vj = int(v[int(j)])
+            col = cols[int(j)]
+            for delta in range(-radius, radius + 1):
+                if delta == 0:
+                    continue
+                nv = vj + delta
+                if nv < -gamma or nv > gamma:
+                    continue
+                cand_res = center_mod(residual - col * delta, q)
+                cv, cosum, cmaxov, rr_c = objective_uv_rr_sq_temp_vj(cand_res, v, int(j), nv, gamma)
+                cand_score = (cv, cosum, cmaxov)
+                if better_score(cand_score, best_score):
+                    best_score = cand_score
+                    new_vv = vv_sq - vj * vj + nv * nv
+                    best_pack = (cand_res.copy(), int(j), nv, cand_score, new_vv, rr_c)
+    if best_pack is None:
+        return None
+    cand_res, j, nv, new_score, new_vv, rr_c = best_pack
+    v[j] = nv
+    return cand_res, v, new_vv, new_score, rr_c
 
 
 def cp_sat_repair(
@@ -618,7 +823,12 @@ def cp_sat_repair(
     time_limit_sec: float,
     forced_cols: Optional[np.ndarray] = None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """Try small-window exact repair on key columns; returns (u, v_new) on success."""
+    """
+    对溢出最严重的若干行、相关列做小规模 CP-SAT 精确修复。
+
+    变量为 ``Δv_j``（有界窗口），目标最小化关键行上的 ``|u_i|`` 代理。
+    成功返回 ``(u_new, v_new)``；无 ortools 或无可行解则 None。
+    """
     try:
         from ortools.sat.python import cp_model  # type: ignore
     except Exception:
@@ -650,30 +860,46 @@ def cp_sat_repair(
         high = min(delta_window, gamma - int(v[j]))
         dvars[int(j)] = model.NewIntVar(int(low), int(high), f"d_{int(j)}")
 
-    # Enforce all rows within box after update; use centered representative by slacking with k_i*q.
+    k_vars: Dict[int, Any] = {}
+    centered_abs: Dict[int, Any] = {}
     for i in range(n):
-        # new_res_i = residual_i - sum(A[i,j] * d_j)  (before recenter)
         expr = int(residual[i])
         for j in cols:
             expr -= int(A[i, int(j)]) * dvars[int(j)]
-        # Allow shift by q*k_i into centered interval [-gamma, gamma]
-        # bounds for k_i from expr range
         coeff_sum = sum(abs(int(A[i, int(j)])) * delta_window for j in cols)
         lo_expr = int(residual[i]) - coeff_sum
         hi_expr = int(residual[i]) + coeff_sum
         k_min = int(np.floor((lo_expr + gamma) / q)) - 1
         k_max = int(np.ceil((hi_expr - gamma) / q)) + 1
         k_i = model.NewIntVar(k_min, k_max, f"k_{i}")
-        model.Add(expr - q * k_i <= gamma)
-        model.Add(expr - q * k_i >= -gamma)
+        k_vars[i] = k_i
+        centered = expr - q * k_i
+        model.Add(centered <= gamma)
+        model.Add(centered >= -gamma)
+        abs_c = model.NewIntVar(
+            0,
+            max(abs(lo_expr), abs(hi_expr)) + abs(q) * max(abs(k_min), abs(k_max)) + 8,
+            f"abs_{i}",
+        )
+        model.AddAbsEquality(abs_c, centered)
+        centered_abs[i] = abs_c
 
-    # Small movement objective for stability.
+    over_vars = []
+    for i in key_rows:
+        ii = int(i)
+        over_i = model.NewIntVar(0, 2_000_000_000, f"over_{ii}")
+        model.Add(over_i >= centered_abs[ii] - gamma)
+        model.Add(over_i >= 0)
+        over_vars.append(over_i)
+    max_over = model.NewIntVar(0, 2_000_000_000, "cp_max_over")
+    if over_vars:
+        model.AddMaxEquality(max_over, over_vars)
     abs_terms = []
     for j in cols:
         a = model.NewIntVar(0, delta_window, f"a_{int(j)}")
         model.AddAbsEquality(a, dvars[int(j)])
         abs_terms.append(a)
-    model.Minimize(sum(abs_terms))
+    model.Minimize(max_over * 1_000_000 + sum(abs_terms))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = max(0.05, float(time_limit_sec))
@@ -856,7 +1082,13 @@ def _single_restart_inner(
     total_restarts: int,
     K_basis: Optional[np.ndarray] = None,
 ) -> Tuple[bool, np.ndarray, np.ndarray, Dict[str, Any], Tuple[int, int, int]]:
-    """One restart of local search; returns (success, u_or_residual, v, meta_on_success, score)."""
+    """
+    单次 restart 的局部搜索主循环（约 ``cfg.iters`` 步）。
+
+    算子包括：单/双坐标移动、kernel walk、LS 投影、CP 修复与块 CP、pull kick 等；
+    按 ``residual_phase_end`` / ``kernel_phase_start`` 调节邻域强度。
+    返回 ``(success, u, v, meta, score)``；success 时 meta 含详细指标。
+    """
     restart_t0 = time.perf_counter()
     v = np.asarray(v_init, dtype=np.int64).copy()
     residual = center_mod(t - (A @ v), q)
@@ -864,6 +1096,7 @@ def _single_restart_inner(
     score = (viol, osum, maxov)
     vv_sq = int(np.dot(v.astype(np.int64), v.astype(np.int64)))
     best_local_score = score
+    best_v_snap = v.copy()
     stagnation = 0
     temperature = 1.0
     _, m = A.shape
@@ -902,11 +1135,15 @@ def _single_restart_inner(
         bad_v = np.flatnonzero(np.abs(v) > gamma)
         bad_count = int(bad_idx.size + bad_v.size)
         if bad_idx.size > 0:
-            worst = bad_idx[np.argsort(-abs_r[bad_idx])[: min(8, bad_idx.size)]]
+            worst = bad_idx[
+                np.argsort(-abs_r[bad_idx])[: min(max(cfg.u_row_snap_top_rows, 8), bad_idx.size)]
+            ]
         else:
             worst = np.array([], dtype=np.int64)
         step_radius_main = adaptive_step_radius(cfg, bad_count, score[2], gamma)
-        if bad_v.size > 0:
+        if bad_idx.size > 0 and bad_v.size == 0:
+            coord_order = u_priority_coord_order(A, residual, gamma, bad_v, worst, m, rng)
+        elif bad_v.size > 0:
             rest = np.setdiff1d(np.arange(m, dtype=np.int64), bad_v)
             coord_order = np.concatenate([rng.permutation(bad_v), rng.permutation(rest)])
         else:
@@ -1145,6 +1382,23 @@ def _single_restart_inner(
                     improved = True
                     break
 
+        if (
+            cfg.u_row_snap_every > 0
+            and bad_idx.size > 0
+            and step % cfg.u_row_snap_every == 0
+        ):
+            snap_rows = (
+                worst
+                if worst.size > 0
+                else bad_idx[np.argsort(-abs_r[bad_idx])[: cfg.u_row_snap_top_rows]]
+            )
+            snap_out = try_u_row_snap_move(
+                A, residual, v, cols, q, gamma, score, cfg, snap_rows, vv_sq
+            )
+            if snap_out is not None:
+                residual, v, vv_sq, score, rr_sq_sync = snap_out
+                improved = True
+
         if cfg.pair_relief_every > 0 and bad_idx.size > 0 and step % cfg.pair_relief_every == 0:
             for _ in range(cfg.pair_relief_attempts):
                 j, k = rng.choice(m, size=2, replace=False)
@@ -1193,9 +1447,88 @@ def _single_restart_inner(
 
         if better_score(score, best_local_score):
             best_local_score = score
+            best_v_snap = v.copy()
             stagnation = 0
         else:
             stagnation += 1
+
+        if (
+            cfg.use_violation_ls
+            and bad_idx.size > 0
+            and step % max(1, cfg.violation_ls_every) == 0
+        ):
+            try:
+                from sis_advanced_u_ops import violation_ls_step
+
+                vls = violation_ls_step(
+                    A,
+                    residual,
+                    v,
+                    cols,
+                    q,
+                    gamma,
+                    score,
+                    rng,
+                    top_rows=cfg.violation_ls_top_rows,
+                    top_cols=cfg.violation_ls_top_cols,
+                    better_score=better_score,
+                    objective_uv=objective_uv,
+                )
+                if vls is not None:
+                    residual, v, vv_sq, score, rr_sq_sync = vls
+                    improved = True
+            except Exception:
+                pass
+
+        if (
+            cfg.use_layered_ls
+            and bad_idx.size > 0
+            and step % max(1, cfg.layered_ls_every) == 0
+        ):
+            try:
+                from sis_advanced_u_ops import layered_row_projection
+
+                lls = layered_row_projection(
+                    A,
+                    t,
+                    q,
+                    gamma,
+                    residual,
+                    v,
+                    score,
+                    n_layers=3,
+                    better_score=better_score,
+                    objective_uv_and_rr_sq=objective_uv_and_rr_sq,
+                )
+                if lls is not None:
+                    residual, v, vv_sq, score, rr_sq_sync = lls
+                    improved = True
+            except Exception:
+                pass
+
+        if cfg.cheap_lll_trials > 0 and step > 0 and step % 60 == 0:
+            try:
+                from sis_advanced_u_ops import cheap_pair_reduction
+
+                v, sc2 = cheap_pair_reduction(
+                    v,
+                    A,
+                    t,
+                    q,
+                    gamma,
+                    score,
+                    rng,
+                    n_trials=cfg.cheap_lll_trials,
+                    better_score=better_score,
+                    objective_uv=objective_uv,
+                )
+                if better_score(sc2, score):
+                    residual = center_mod(t - (A @ v), q)
+                    viol, osum, maxov, rr_sq_sync = objective_uv_and_rr_sq(residual, v, gamma)
+                    score = (viol, osum, maxov)
+                    improved = True
+            except Exception:
+                pass
 
         if not improved and (stagnation % cfg.kick_every == 0):
             score_snap = score
@@ -1226,6 +1559,29 @@ def _single_restart_inner(
                         if better_score(score, score_snap):
                             improved = True
                             pull_helped = True
+            if not pull_helped and cfg.gaussian_on_stagnation and bad_idx.size > 0:
+                try:
+                    from sis_advanced_u_ops import discrete_gaussian_seeds
+
+                    sig = max(1.0, cfg.gaussian_seed_sigma * (1.0 + 0.05 * score[2]))
+                    for gv in discrete_gaussian_seeds(
+                        best_v_snap, gamma, rng, n_seeds=4, sigma=sig
+                    ):
+                        gres = center_mod(t - (A @ gv), q)
+                        gsc = objective_uv(gres, gv, gamma)
+                        if better_score(gsc, score):
+                            v = gv.copy()
+                            residual = gres
+                            score = gsc
+                            viol, osum, maxov, rr_sq_sync = objective_uv_and_rr_sq(
+                                residual, v, gamma
+                            )
+                            vv_sq = int(np.dot(v.astype(np.int64), v.astype(np.int64)))
+                            improved = True
+                            pull_helped = True
+                            break
+                except Exception:
+                    pass
             if not pull_helped:
                 kick_idx = rng.choice(m, size=min(cfg.kick_size, m), replace=False)
                 for j in kick_idx:
@@ -1251,11 +1607,13 @@ def _single_restart_inner(
                 v, residual, vv_sq, score, rr_sq_sync = ls_out
                 improved = True
 
+        u_only_overflow = bad_idx.size > 0 and bad_v.size == 0
         if (
             K.shape[1] > 0
             and cfg.kernel_walk_every > 0
             and step % cfg.kernel_walk_every == 0
             and in_kernel_phase
+            and not u_only_overflow
         ):
             for _ in range(12):
                 coeffs = rng.integers(
@@ -1338,6 +1696,44 @@ def _single_restart_inner(
                 vv_sq = int(np.dot(v.astype(np.int64), v.astype(np.int64)))
                 improved = True
 
+        if (
+            cfg.cp_aggressive_every > 0
+            and step > 0
+            and step % cfg.cp_aggressive_every == 0
+            and bad_idx.size > 0
+        ):
+            agg_rep = cp_sat_repair(
+                A=A,
+                t=t,
+                q=q,
+                gamma=gamma,
+                v=v,
+                residual=residual,
+                row_top_k=min(cfg.cp_aggressive_row_k, int(bad_idx.size)),
+                delta_window=max(cfg.cp_repair_window, cfg.max_delta),
+                time_limit_sec=max(cfg.cp_repair_time_limit, 1.5),
+                forced_cols=None,
+            )
+            if agg_rep is not None:
+                u_agg, v_agg = agg_rep
+                sc_agg = objective_uv(u_agg, v_agg, gamma)
+                if better_score(sc_agg, score):
+                    v = v_agg.copy()
+                    residual = u_agg.copy()
+                    viol, osum, maxov, rr_sq_sync = objective_uv_and_rr_sq(residual, v, gamma)
+                    score = (viol, osum, maxov)
+                    vv_sq = int(np.dot(v.astype(np.int64), v.astype(np.int64)))
+                    improved = True
+                    ok_agg, met_agg = verify_solution(A, t, q, gamma, residual, v, require_norm_ge_q2)
+                    if ok_agg:
+                        return (
+                            True,
+                            residual.copy(),
+                            v.copy(),
+                            {"restart": restart_idx, "steps": step, "cp_aggressive": 1, **met_agg},
+                            score,
+                        )
+
         # Optional exact repair near feasibility (graceful no-op if ortools unavailable).
         if score[0] <= cfg.cp_repair_threshold:
             repaired = cp_sat_repair(
@@ -1376,7 +1772,7 @@ def _single_restart_inner(
 
 
 def _kernel_columns_from_payload(payload: Dict[str, Any], m: int) -> Optional[np.ndarray]:
-    """Rebuild (m, k) kernel matrix from payload['kernel_K'] list of columns; None if absent."""
+    """从并行 worker payload 的 ``kernel_K`` 列列表重建 (m,k) 核矩阵；缺失则 None。"""
     cols_list = payload.get("kernel_K")
     if cols_list is None:
         return None
@@ -1386,6 +1782,7 @@ def _kernel_columns_from_payload(payload: Dict[str, Any], m: int) -> Optional[np
 
 
 def _parallel_restart_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """ProcessPool 子进程入口：反序列化 payload，跑 ``_single_restart_inner``，返回 u/v/meta/score。"""
     A = np.asarray(payload["A"], dtype=np.int64)
     t = np.asarray(payload["t"], dtype=np.int64)
     q = int(payload["q"])
@@ -1431,6 +1828,11 @@ def local_search_one(
     cfg: SearchConfig,
     require_norm_ge_q2: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    """
+    对单实例运行完整搜索：BKZ/核预计算 → dual 种子 → 多 restart → 返回最优 (u,v)。
+
+    若某 restart 内层已可行则立即返回；否则返回 score_key 最优的一轮结果及 meta。
+    """
     rng = np.random.default_rng(cfg.seed)
     n, m = A.shape
     A = np.mod(A, q).astype(np.int64, copy=False)
@@ -1445,11 +1847,32 @@ def local_search_one(
         kernel_K_payload: List[List[int]] = []
 
     lattice_prepend: List[np.ndarray] = []
+    lattice_backend = "none"
+    if cfg.use_wagner_seeds:
+        try:
+            from sis_advanced_u_ops import wagner_subsystem_seeds
+
+            lattice_prepend.extend(
+                wagner_subsystem_seeds(
+                    A,
+                    t,
+                    q,
+                    gamma,
+                    rng,
+                    n_rows=cfg.wagner_rows,
+                    n_cols=cfg.wagner_cols,
+                    box_radius=cfg.wagner_box_radius,
+                    list_cap=cfg.wagner_list_cap,
+                    max_seeds=16,
+                )
+            )
+        except Exception:
+            pass
     if cfg.use_bkz_seeds and cfg.bkz_beta > 0:
         try:
-            from lattice_bkz import collect_bkz_v_seeds
+            from lattice_bkz import collect_bkz_v_seeds, lattice_backend_label
 
-            lattice_prepend = collect_bkz_v_seeds(
+            bkz_seeds = collect_bkz_v_seeds(
                 A,
                 q,
                 gamma,
@@ -1458,12 +1881,20 @@ def local_search_one(
                 cfg.bkz_max_dim,
                 combo_depth=cfg.bkz_combo_depth,
                 combo_coeff_max=cfg.bkz_combo_coeff_max,
+                rng=rng,
+                bkz_tours=2,
             )
+            lattice_prepend.extend(bkz_seeds)
+            lattice_backend = lattice_backend_label()
         except Exception:
-            lattice_prepend = []
+            lattice_backend = "error"
 
     dual_candidates: List[np.ndarray] = []
-    dual_meta: Dict[str, int] = {"num_candidates": 0}
+    dual_meta: Dict[str, Any] = {
+        "num_candidates": 0,
+        "lattice_backend": lattice_backend,
+        "lattice_seed_count": len(lattice_prepend),
+    }
 
     if cfg.use_dual_space:
         dual_candidates, dual_meta = build_dual_space_candidates(
@@ -1636,6 +2067,9 @@ def local_search_one(
 
 
 def solve_instances(instances: List[Dict], cfg: SearchConfig) -> List[Dict]:
+    """
+    CLI 批量入口：逐实例推断 sis_class，应用 ``apply_sis_class_defaults`` 后调用 ``local_search_one``。
+    """
     out = []
     seed_base = cfg.seed
     for idx, inst in enumerate(instances):

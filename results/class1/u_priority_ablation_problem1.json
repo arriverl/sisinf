@@ -1,0 +1,59 @@
+[
+  {
+    "label": "A_baseline",
+    "success": false,
+    "elapsed_sec": 126.93,
+    "verify": {
+      "congruence_ok": 1,
+      "inf_u": 46,
+      "inf_v": 10,
+      "norm_sq": 68412,
+      "norm_req_ok": 1,
+      "nontrivial_ok": 1
+    },
+    "meta": {
+      "violations": 57,
+      "max_overflow": 31,
+      "overflow_sum": 969,
+      "dual_candidates": 24
+    }
+  },
+  {
+    "label": "B_cover32x24",
+    "success": false,
+    "elapsed_sec": 129.75,
+    "verify": {
+      "congruence_ok": 1,
+      "inf_u": 45,
+      "inf_v": 15,
+      "norm_sq": 73399,
+      "norm_req_ok": 1,
+      "nontrivial_ok": 1
+    },
+    "meta": {
+      "violations": 61,
+      "max_overflow": 30,
+      "overflow_sum": 987,
+      "dual_candidates": 24
+    }
+  },
+  {
+    "label": "C_cover40x32",
+    "success": false,
+    "elapsed_sec": 131.21,
+    "verify": {
+      "congruence_ok": 1,
+      "inf_u": 45,
+      "inf_v": 15,
+      "norm_sq": 70784,
+      "norm_req_ok": 1,
+      "nontrivial_ok": 1
+    },
+    "meta": {
+      "violations": 65,
+      "max_overflow": 30,
+      "overflow_sum": 1035,
+      "dual_candidates": 24
+    }
+  }
+]

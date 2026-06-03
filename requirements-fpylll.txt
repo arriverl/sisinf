@@ -1,0 +1,8 @@
+# 真 BKZ 格种子（fpylll）。Windows 上 pip 源码编译常缺 GMP，请用 conda-forge：
+#   conda install -c conda-forge fpylll
+# 或在 WSL/Ubuntu：
+#   pip install fpylll
+#
+# 安装后运行：python scripts/check_fpylll.py
+
+fpylll>=0.6.0
