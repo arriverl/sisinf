@@ -173,6 +173,14 @@ def solve_one(
             return best
         if _better(verify, best.get("verify", {})):
             best = {**rec, "rounds_tried": round_idx, "u": u.tolist(), "v": v.tolist()}
+            best_path = os.path.join(out_dir, f"problem{pid}_best.json")
+            with open(best_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {**best, "u": best["u"], "v": best["v"]},
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
     best["rounds_tried"] = round_idx
     best["elapsed_sec"] = time.time() - t0
     return best

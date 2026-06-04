@@ -1897,9 +1897,10 @@ def local_search_one(
     }
 
     if cfg.use_dual_space:
-        dual_candidates, dual_meta = build_dual_space_candidates(
+        dual_candidates, built_meta = build_dual_space_candidates(
             A, t, q, gamma, cfg, rng, prepend=lattice_prepend if lattice_prepend else None
         )
+        dual_meta = {**dual_meta, **built_meta}
     elif lattice_prepend:
         scored = []
         extras: List[np.ndarray] = []
@@ -2058,7 +2059,9 @@ def local_search_one(
                 **metrics,
                 "energy": energy_meta["energy"],
                 "entropy": energy_meta["entropy"],
-                "dual_candidates": dual_meta["num_candidates"],
+                "dual_candidates": dual_meta.get("num_candidates", 0),
+                "lattice_backend": dual_meta.get("lattice_backend", lattice_backend),
+                "lattice_seed_count": dual_meta.get("lattice_seed_count", len(lattice_prepend)),
             }
 
     if best_u is not None and best_v is not None:
