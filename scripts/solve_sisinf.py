@@ -1260,8 +1260,10 @@ def _single_restart_inner(
                             accept = True
                         elif same_score_key(cand_score, score) and new_energy < old_energy:
                             accept = True
-                        elif cfg.allow_uphill_sa:
-                            prob = np.exp(-(new_energy - old_energy) / max(temperature, 1e-6))
+                        elif cfg.allow_uphill_sa and new_energy > old_energy:
+                            # 仅对能量变差的上坡步做 SA；裁剪指数避免 energy≈1e8 时 exp 溢出
+                            uphill = (new_energy - old_energy) / max(temperature, 1e-6)
+                            prob = np.exp(-min(uphill, 700.0))
                             if rng.random() < prob:
                                 accept = True
                         if accept:
@@ -2187,6 +2189,36 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cp-repair-threshold", type=int, default=8, help="Trigger CP-SAT repair when violations <= this.")
     p.add_argument("--cp-repair-window", type=int, default=3, help="Delta window for CP-SAT repair variables.")
     p.add_argument("--cp-repair-time-limit", type=float, default=0.5, help="Per-call CP-SAT time limit (seconds).")
+    p.add_argument(
+        "--cp-aggressive-every",
+        type=int,
+        default=0,
+        help="Periodic CP-SAT on worst u rows when far from feasible (0=use class default).",
+    )
+    p.add_argument(
+        "--cp-aggressive-row-k",
+        type=int,
+        default=0,
+        help="Number of worst u rows per aggressive CP call (0=use SearchConfig/class default).",
+    )
+    p.add_argument(
+        "--u-row-snap-every",
+        type=int,
+        default=0,
+        help="Directed coordinate snap on worst u rows every N steps (0=use class default).",
+    )
+    p.add_argument(
+        "--u-row-snap-top-rows",
+        type=int,
+        default=0,
+        help="How many worst u rows to target for row snap (0=use SearchConfig/class default).",
+    )
+    p.add_argument(
+        "--u-row-snap-cols",
+        type=int,
+        default=0,
+        help="How many v columns to enumerate per u row snap (0=use SearchConfig/class default).",
+    )
     p.add_argument("--kernel-walk-every", type=int, default=25, help="0 disables mod-q kernel walk on v (u unchanged).")
     p.add_argument("--kernel-coeff-max", type=int, default=2, help="Max absolute coeff on each kernel basis vector.")
     p.add_argument("--kernel-max-basis", type=int, default=24, help="Max number of kernel basis columns to use.")
@@ -2269,6 +2301,11 @@ def main() -> None:
         cp_repair_threshold=max(0, int(args.cp_repair_threshold)),
         cp_repair_window=max(1, int(args.cp_repair_window)),
         cp_repair_time_limit=max(0.05, float(args.cp_repair_time_limit)),
+        cp_aggressive_every=max(0, int(args.cp_aggressive_every)),
+        cp_aggressive_row_k=max(0, int(args.cp_aggressive_row_k)),
+        u_row_snap_every=max(0, int(args.u_row_snap_every)),
+        u_row_snap_top_rows=max(0, int(args.u_row_snap_top_rows)),
+        u_row_snap_cols=max(0, int(args.u_row_snap_cols)),
         kernel_walk_every=max(0, int(args.kernel_walk_every)),
         kernel_coeff_max=max(1, int(args.kernel_coeff_max)),
         kernel_max_basis=max(1, int(args.kernel_max_basis)),
