@@ -7,18 +7,39 @@ Incumbent 收尾算子：小子格真 BKZ 种子 + 全维 v 的 L∞ ILP（ortoo
 from __future__ import annotations
 
 import time
+import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from lattice_bkz import (
-    _append_clipped_v,
     _build_ajtai_basis,
     _fpylll_reduce_multi_tour,
     _seeds_from_reduced_basis,
     fpylll_available,
 )
-from solve_sisinf import center_mod, objective_uv, verify_solution
+from solve_sisinf import center_mod, verify_solution
+
+_CP_STATUS_NAMES: Dict[int, str] = {}
+
+
+def _cp_status_name(status: int) -> str:
+    if not _CP_STATUS_NAMES:
+        try:
+            from ortools.sat.python import cp_model  # type: ignore
+
+            _CP_STATUS_NAMES.update(
+                {
+                    cp_model.OPTIMAL: "OPTIMAL",
+                    cp_model.FEASIBLE: "FEASIBLE",
+                    cp_model.INFEASIBLE: "INFEASIBLE",
+                    cp_model.MODEL_INVALID: "MODEL_INVALID",
+                    cp_model.UNKNOWN: "UNKNOWN",
+                }
+            )
+        except Exception:
+            pass
+    return _CP_STATUS_NAMES.get(status, str(status))
 
 
 def pick_worst_u_row_col_subset(
@@ -91,8 +112,6 @@ def collect_sub_bkz_v_seeds(
     if d < 4:
         return [], meta
 
-    out: List[np.ndarray] = []
-    seen: set = set()
     v0 = np.zeros(m, dtype=np.int64) if v_base is None else np.asarray(v_base, dtype=np.int64).copy()
 
     try:
@@ -102,17 +121,16 @@ def collect_sub_bkz_v_seeds(
         return [], meta
 
     partials: List[np.ndarray] = []
+    partial_seen: set = set()
     _seeds_from_reduced_basis(
-        R, n_s, m_s, gamma, max_vectors, combo_depth, combo_coeff_max, seen, partials
+        R, n_s, m_s, gamma, max_vectors, combo_depth, combo_coeff_max, partial_seen, partials
     )
 
+    out: List[np.ndarray] = []
     full_seen: set = set()
     for pv in partials:
         v_full = v0.copy()
-        if embed_mode == "replace":
-            v_full[col_idx] = np.clip(pv, -gamma, gamma)
-        else:
-            v_full[col_idx] = np.clip(pv, -gamma, gamma)
+        v_full[col_idx] = np.clip(pv, -gamma, gamma)
         if np.all(v_full == 0):
             continue
         key = v_full.tobytes()
@@ -138,88 +156,114 @@ def cp_sat_full_v_linf_finish(
     use_hint: bool = True,
     num_workers: int = 4,
     accept_suboptimal: bool = True,
-) -> Optional[Tuple[np.ndarray, np.ndarray, Dict[str, Any]]]:
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Dict[str, Any]]:
     """
     对**全部** v 维做 CP-SAT，最小化 ``‖center(t−Av)‖∞``（即 u 的 L∞ 溢出上界）。
 
-    变量：``v_j ∈ [-γ,γ]``；每行 ``k_i`` 实现对称取模。成功可行返回 ``(u,v,meta)``；
-    ``accept_suboptimal=True`` 时若未完全可行也返回当前最优 incumbent。
+    始终返回 ``(u, v, meta)``；失败时 u/v 可能为 None，meta 含 ``ilp_error`` / ``ilp_status_name``。
     """
+    meta: Dict[str, Any] = {
+        "ilp_ok": False,
+        "ilp_error": None,
+        "ilp_status": None,
+        "ilp_status_name": None,
+        "ilp_time_sec": 0.0,
+    }
     try:
         from ortools.sat.python import cp_model  # type: ignore
-    except Exception:
-        return None
+    except Exception as exc:
+        meta["ilp_error"] = f"ortools import failed: {exc}"
+        return None, None, meta
 
     t0 = time.perf_counter()
-    A = np.mod(np.asarray(A, dtype=np.int64), q)
-    t = np.mod(np.asarray(t, dtype=np.int64), q)
-    v0 = np.clip(np.asarray(v0, dtype=np.int64).ravel(), -gamma, gamma)
-    n, m = A.shape
-    if v0.size != m:
-        return None
+    try:
+        A = np.mod(np.asarray(A, dtype=np.int64), q)
+        t = np.mod(np.asarray(t, dtype=np.int64), q)
+        v0 = np.clip(np.asarray(v0, dtype=np.int64).ravel(), -gamma, gamma)
+        n, m = A.shape
+        if v0.size != m:
+            meta["ilp_error"] = f"v0 size {v0.size} != m {m}"
+            return None, None, meta
 
-    model = cp_model.CpModel()
-    v_vars: Dict[int, Any] = {}
-    for j in range(m):
-        vj = model.NewIntVar(-gamma, gamma, f"v_{j}")
-        v_vars[j] = vj
-        if use_hint:
-            model.AddHint(vj, int(v0[j]))
-
-    over_vars = []
-    abs_v_move = []
-    for j in range(m):
-        mv = model.NewIntVar(0, 2 * gamma, f"mv_{j}")
-        model.AddAbsEquality(mv, v_vars[j] - int(v0[j]))
-        abs_v_move.append(mv)
-
-    for i in range(n):
-        expr = int(t[i])
+        model = cp_model.CpModel()
+        v_vars: Dict[int, Any] = {}
         for j in range(m):
-            aij = int(A[i, j])
-            if aij:
-                expr -= aij * v_vars[j]
-        s_bound = int(np.sum(np.abs(A[i, :])) * gamma)
-        lo_raw = int(t[i]) - s_bound
-        hi_raw = int(t[i]) + s_bound
-        k_min = int(np.floor((lo_raw + gamma) / q)) - 1
-        k_max = int(np.ceil((hi_raw - gamma) / q)) + 1
-        k_i = model.NewIntVar(k_min, k_max, f"k_{i}")
-        centered = expr - q * k_i
-        abs_c = model.NewIntVar(
-            0,
-            max(abs(lo_raw), abs(hi_raw)) + abs(q) * max(abs(k_min), abs(k_max)) + 8,
-            f"abs_{i}",
-        )
-        model.AddAbsEquality(abs_c, centered)
-        over_i = model.NewIntVar(0, 2_000_000_000, f"over_{i}")
-        model.Add(over_i >= abs_c - gamma)
-        model.Add(over_i >= 0)
-        over_vars.append(over_i)
+            vj = model.NewIntVar(-gamma, gamma, f"v_{j}")
+            v_vars[j] = vj
+            if use_hint:
+                model.AddHint(vj, int(v0[j]))
 
-    max_over = model.NewIntVar(0, 2_000_000_000, "max_over")
-    model.AddMaxEquality(max_over, over_vars)
-    model.Minimize(max_over * 1_000_000 + sum(over_vars) + sum(abs_v_move))
+        abs_v_move = []
+        for j in range(m):
+            mv = model.NewIntVar(0, 2 * gamma, f"mv_{j}")
+            model.AddAbsEquality(mv, v_vars[j] - int(v0[j]))
+            abs_v_move.append(mv)
 
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max(1.0, float(time_limit_sec))
-    solver.parameters.num_search_workers = max(1, int(num_workers))
-    status = solver.Solve(model)
+        over_vars = []
+        over_ub = gamma + 8
+        for i in range(n):
+            s_bound = int(np.sum(np.abs(A[i, :])) * gamma)
+            lo_raw = int(t[i]) - s_bound
+            hi_raw = int(t[i]) + s_bound
+            raw_i = model.NewIntVar(lo_raw, hi_raw, f"raw_{i}")
+            model.Add(
+                raw_i
+                == int(t[i])
+                - sum(int(A[i, j]) * v_vars[j] for j in range(m) if int(A[i, j]) != 0)
+            )
 
-    v_new = np.array([int(solver.Value(v_vars[j])) for j in range(m)], dtype=np.int64)
-    u_new = center_mod(t - (A @ v_new), q)
-    ok, verify = verify_solution(A, t, q, gamma, u_new, v_new, False)
-    meta = {
-        "ilp_status": int(status),
-        "ilp_optimal": status == cp_model.OPTIMAL,
-        "ilp_feasible": status in (cp_model.OPTIMAL, cp_model.FEASIBLE),
-        "ilp_time_sec": time.perf_counter() - t0,
-        "ilp_max_over": int(solver.Value(max_over)) if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None,
-        "verify": verify,
-        "success": bool(ok),
-    }
-    if ok:
-        return u_new, v_new, meta
-    if accept_suboptimal and status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return u_new, v_new, meta
-    return None
+            k_min = int(np.floor((lo_raw + gamma) / q)) - 1
+            k_max = int(np.ceil((hi_raw - gamma) / q)) + 1
+            if k_min > k_max:
+                k_min, k_max = k_max, k_min
+            k_i = model.NewIntVar(k_min, k_max, f"k_{i}")
+            centered = raw_i - q * k_i
+
+            abs_hi = max(abs(lo_raw), abs(hi_raw)) + abs(q) * max(abs(k_min), abs(k_max)) + gamma + 8
+            abs_c = model.NewIntVar(0, abs_hi, f"abs_{i}")
+            model.AddAbsEquality(abs_c, centered)
+
+            over_i = model.NewIntVar(0, abs_hi, f"over_{i}")
+            model.Add(over_i + gamma >= abs_c)
+            over_vars.append(over_i)
+            over_ub = max(over_ub, abs_hi)
+
+        max_over = model.NewIntVar(0, over_ub, "max_over")
+        model.AddMaxEquality(max_over, over_vars)
+        model.Minimize(1_000_000 * max_over + sum(over_vars) + sum(abs_v_move))
+
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = max(1.0, float(time_limit_sec))
+        solver.parameters.num_search_workers = max(1, int(num_workers))
+        status = solver.Solve(model)
+
+        meta["ilp_status"] = int(status)
+        meta["ilp_status_name"] = _cp_status_name(int(status))
+        meta["ilp_time_sec"] = time.perf_counter() - t0
+        meta["ilp_optimal"] = status == cp_model.OPTIMAL
+        meta["ilp_feasible"] = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            meta["ilp_error"] = f"solver status {_cp_status_name(int(status))}"
+            if status == cp_model.MODEL_INVALID:
+                meta["ilp_error"] += " (check constraint linearity)"
+            return None, None, meta
+
+        v_new = np.array([int(solver.Value(v_vars[j])) for j in range(m)], dtype=np.int64)
+        u_new = center_mod(t - (A @ v_new), q)
+        ok, verify = verify_solution(A, t, q, gamma, u_new, v_new, False)
+        meta["ilp_max_over"] = int(solver.Value(max_over))
+        meta["verify"] = verify
+        meta["success"] = bool(ok)
+        meta["ilp_ok"] = True
+
+        if ok or accept_suboptimal:
+            return u_new, v_new, meta
+        meta["ilp_error"] = "solution not accepted"
+        return None, None, meta
+
+    except Exception as exc:
+        meta["ilp_error"] = f"{type(exc).__name__}: {exc}"
+        meta["ilp_traceback"] = traceback.format_exc()
+        meta["ilp_time_sec"] = time.perf_counter() - t0
+        return None, None, meta

@@ -106,7 +106,7 @@ def main() -> None:
 
     if not args.skip_ilp:
         print(f"[finish] full-v ILP, limit={args.ilp_time_limit}s ...", flush=True)
-        ilp_out = cp_sat_full_v_linf_finish(
+        u_ilp, v_ilp, meta = cp_sat_full_v_linf_finish(
             A,
             t,
             q,
@@ -115,14 +115,13 @@ def main() -> None:
             time_limit_sec=args.ilp_time_limit,
             num_workers=args.ilp_workers,
         )
-        phase: Dict[str, Any] = {"name": "full_v_ilp", "ok": False}
-        if ilp_out is not None:
-            u_ilp, v_ilp, meta = ilp_out
+        phase: Dict[str, Any] = {"name": "full_v_ilp", "ok": False, "meta": meta}
+        if u_ilp is not None and v_ilp is not None:
             ok_ilp, ver_ilp = verify_solution(A, t, q, gamma, u_ilp, v_ilp, require_norm)
             phase = {"name": "full_v_ilp", "ok": bool(ok_ilp), "verify": ver_ilp, "meta": meta}
             print(
                 f"[finish] ILP done: success={ok_ilp} inf_u={ver_ilp.get('inf_u')} inf_v={ver_ilp.get('inf_v')} "
-                f"time={meta.get('ilp_time_sec', 0):.1f}s",
+                f"status={meta.get('ilp_status_name')} time={meta.get('ilp_time_sec', 0):.1f}s",
                 flush=True,
             )
             if _better_verify(ver_ilp, best_verify):
@@ -140,8 +139,11 @@ def main() -> None:
                 print(f"[finish] feasible via ILP -> {args.output}", flush=True)
                 return
         else:
-            phase["error"] = "ortools missing or solver failed"
-            print("[finish] ILP skipped/failed (ortools?)", flush=True)
+            err = meta.get("ilp_error", "unknown")
+            phase["error"] = err
+            print(f"[finish] ILP failed: {err}", flush=True)
+            if meta.get("ilp_traceback"):
+                print(meta["ilp_traceback"], flush=True)
         report["phases"].append(phase)
 
     if not args.skip_sub_bkz and not report["success"]:
@@ -178,7 +180,8 @@ def main() -> None:
             A, t, q, gamma, cfg, require_norm, prepend_v_seeds=prepend
         )
         ok_ls, ver_ls = verify_solution(A, t, q, gamma, u_ls, v_ls, require_norm)
-        phase["ls_verify"] = ver_ls
+        phase["ok"] = bool(ok_ls)
+        phase["verify"] = ver_ls
         phase["ls_meta"] = meta_ls
         print(
             f"[finish] LS after sub-BKZ: inf_u={ver_ls.get('inf_u')} inf_v={ver_ls.get('inf_v')}",
