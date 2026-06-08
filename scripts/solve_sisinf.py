@@ -1829,6 +1829,7 @@ def local_search_one(
     gamma: int,
     cfg: SearchConfig,
     require_norm_ge_q2: bool = False,
+    prepend_v_seeds: Optional[List[np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
     对单实例运行完整搜索：BKZ/核预计算 → dual 种子 → 多 restart → 返回最优 (u,v)。
@@ -1849,6 +1850,11 @@ def local_search_one(
         kernel_K_payload: List[List[int]] = []
 
     lattice_prepend: List[np.ndarray] = []
+    if prepend_v_seeds:
+        for pv in prepend_v_seeds:
+            pv = np.asarray(pv, dtype=np.int64).ravel()
+            if pv.size == m:
+                lattice_prepend.append(pv.copy())
     lattice_backend = "none"
     if cfg.use_wagner_seeds:
         try:

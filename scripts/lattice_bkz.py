@@ -97,6 +97,7 @@ def _fpylll_reduce_multi_tour(
     *,
     block_sizes: Optional[List[int]] = None,
     tours: int = 2,
+    force_bkz: bool = False,
 ) -> np.ndarray:
     """
     LLL + 多 block_size 的 BKZ（近似 oracle 多种子策略）。
@@ -123,7 +124,8 @@ def _fpylll_reduce_multi_tour(
         )
 
     # n+m≈200 时全量 BKZ 极慢；>160 维仅 LLL（仍比纯启发式强）
-    run_bkz = d <= 160
+    # 小子格（如 40×40→80 维）可 force_bkz=True 跑真 BKZ
+    run_bkz = force_bkz or d <= 160
     if run_bkz:
         for _ in range(max(1, tours)):
             for bs in block_sizes:
