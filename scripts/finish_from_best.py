@@ -1,17 +1,32 @@
 """
 从 incumbent（如 problem1_best.json）做收尾攻击：
 
-1. 全维 v 的 L∞ ILP（ortools，默认 3600s）；
-2. 小子格 40×40 真 BKZ 种子 + 短程局部搜索。
+1. 全维 / 分块 / 分层 v 的 L∞ ILP（ortools）；
+2. 小子格 40×40 真 BKZ 种子 + 短程局部搜索（默认建议跳过）。
 
 用法（项目根目录）::
 
+  # 全维 ILP（默认）
   python3 scripts/finish_from_best.py \\
     --instance saiti1/sis_inf_problems_json/problem1.json \\
-    --incumbent results/class1/problem1_best.json \\
+    --incumbent results/class1/problem1_best42.json \\
     --output results/p1_finish.json \\
-    --ilp-time-limit 3600 \\
-    --sub-bkz-beta 28
+    --ilp-mode full --ilp-time-limit 3600 --skip-sub-bkz
+
+  # 分块 ILP（突破 42/43 平台时可试）
+  python3 scripts/finish_from_best.py \\
+    --instance saiti1/sis_inf_problems_json/problem1.json \\
+    --incumbent results/class1/problem1_best42.json \\
+    --output results/p1_chunk.json \\
+    --ilp-mode chunk --ilp-chunk-cols 40 --ilp-chunk-rounds 12 \\
+    --ilp-time-limit 3600 --skip-sub-bkz
+
+  # 分层 ILP
+  python3 scripts/finish_from_best.py \\
+    --incumbent results/class1/problem1_best42.json \\
+    --instance saiti1/sis_inf_problems_json/problem1.json \\
+    --output results/p1_lex.json \\
+    --ilp-mode lex --ilp-time-limit 3600 --skip-sub-bkz
 """
 
 from __future__ import annotations
@@ -29,7 +44,7 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from sis_finish_ops import collect_sub_bkz_v_seeds, cp_sat_full_v_linf_finish
+from sis_finish_ops import collect_sub_bkz_v_seeds, run_ilp_finish
 from sis_problem_taxonomy import effective_require_norm_ge_q2, problem_class_from_instance
 from solve_sisinf import SearchConfig, apply_sis_class_defaults, center_mod, local_search_one, verify_solution
 
@@ -64,20 +79,34 @@ def _better_verify(a: Dict[str, int], b: Dict[str, int]) -> bool:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="ILP finish + sub-lattice BKZ from incumbent.")
+    p = argparse.ArgumentParser(description="ILP finish (full/chunk/lex) + optional sub-BKZ from incumbent.")
     p.add_argument("--instance", required=True)
-    p.add_argument("--incumbent", required=True, help="JSON with u, v lists (e.g. problem1_best.json)")
+    p.add_argument("--incumbent", required=True, help="JSON with u, v lists (e.g. problem1_best42.json)")
     p.add_argument("--output", required=True)
     p.add_argument("--seed", type=int, default=424242)
-    p.add_argument("--ilp-time-limit", type=float, default=3600.0, help="Full-v ILP seconds (30–60 min typical)")
+    p.add_argument(
+        "--ilp-mode",
+        choices=["full", "chunk", "lex"],
+        default="full",
+        help="full=全维 v; chunk=分块轮换; lex=三阶段分层",
+    )
+    p.add_argument("--ilp-time-limit", type=float, default=3600.0, help="ILP 总时间预算（秒）")
     p.add_argument("--ilp-workers", type=int, default=4)
+    p.add_argument("--ilp-chunk-cols", type=int, default=40, help="chunk 模式每轮自由列数")
+    p.add_argument("--ilp-chunk-rounds", type=int, default=12, help="chunk 模式轮换轮数")
+    p.add_argument(
+        "--ilp-chunk-stride",
+        type=int,
+        default=0,
+        help="chunk 滑动步长；0 表示 chunk_cols//2",
+    )
     p.add_argument("--skip-ilp", action="store_true")
-    p.add_argument("--skip-sub-bkz", action="store_true")
+    p.add_argument("--skip-sub-bkz", action="store_true", help="推荐开启：sub-BKZ 常使 inf_u 变差")
     p.add_argument("--sub-bkz-rows", type=int, default=40)
     p.add_argument("--sub-bkz-cols", type=int, default=40)
     p.add_argument("--sub-bkz-beta", type=int, default=28)
     p.add_argument("--sub-bkz-seeds", type=int, default=12)
-    p.add_argument("--ls-restarts", type=int, default=8, help="Local search restarts after sub-BKZ seeds")
+    p.add_argument("--ls-restarts", type=int, default=8)
     p.add_argument("--ls-iters", type=int, default=4000)
     args = p.parse_args()
 
@@ -96,6 +125,7 @@ def main() -> None:
 
     report: Dict[str, Any] = {
         "id": pid,
+        "ilp_mode": args.ilp_mode,
         "incumbent_verify": verify0,
         "phases": [],
         "success": bool(ok0),
@@ -105,20 +135,30 @@ def main() -> None:
     t_all = time.time()
 
     if not args.skip_ilp:
-        print(f"[finish] full-v ILP, limit={args.ilp_time_limit}s ...", flush=True)
-        u_ilp, v_ilp, meta = cp_sat_full_v_linf_finish(
+        stride = args.ilp_chunk_stride if args.ilp_chunk_stride > 0 else None
+        print(
+            f"[finish] ILP mode={args.ilp_mode} limit={args.ilp_time_limit}s "
+            f"chunk_cols={args.ilp_chunk_cols} rounds={args.ilp_chunk_rounds} ...",
+            flush=True,
+        )
+        u_ilp, v_ilp, meta = run_ilp_finish(
+            args.ilp_mode,
             A,
             t,
             q,
             gamma,
             best_v,
-            time_limit_sec=args.ilp_time_limit,
+            args.ilp_time_limit,
             num_workers=args.ilp_workers,
+            chunk_cols=args.ilp_chunk_cols,
+            chunk_rounds=args.ilp_chunk_rounds,
+            chunk_stride=stride,
         )
-        phase: Dict[str, Any] = {"name": "full_v_ilp", "ok": False, "meta": meta}
+        phase_name = f"ilp_{args.ilp_mode}"
+        phase: Dict[str, Any] = {"name": phase_name, "ok": False, "meta": meta}
         if u_ilp is not None and v_ilp is not None:
             ok_ilp, ver_ilp = verify_solution(A, t, q, gamma, u_ilp, v_ilp, require_norm)
-            phase = {"name": "full_v_ilp", "ok": bool(ok_ilp), "verify": ver_ilp, "meta": meta}
+            phase = {"name": phase_name, "ok": bool(ok_ilp), "verify": ver_ilp, "meta": meta}
             print(
                 f"[finish] ILP done: success={ok_ilp} inf_u={ver_ilp.get('inf_u')} inf_v={ver_ilp.get('inf_v')} "
                 f"status={meta.get('ilp_status_name')} time={meta.get('ilp_time_sec', 0):.1f}s",

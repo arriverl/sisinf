@@ -23,7 +23,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        from sis_finish_ops import cp_sat_full_v_linf_finish
+        from sis_finish_ops import cp_sat_full_v_linf_finish, run_ilp_finish
 
         m = cp_model.CpModel()
         x = m.NewIntVar(0, 3, "x")
