@@ -161,7 +161,7 @@ def solve_one(
             flush=True,
         )
         if ok:
-            best = {**rec, "rounds_tried": round_idx}
+            best = {**rec, "rounds_tried": round_idx, "u": u.tolist(), "v": v.tolist()}
             sol = os.path.join(out_dir, f"problem{pid}_solution.json")
             with open(sol, "w", encoding="utf-8") as f:
                 json.dump(
