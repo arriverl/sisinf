@@ -24,7 +24,7 @@ from typing import Any, Dict
 
 import numpy as np
 
-from sis_problem_taxonomy import effective_require_norm_ge_q2, problem_class_from_id
+from sis_problem_taxonomy import effective_require_norm_lt_q2, problem_class_from_id
 from solve_sisinf import SearchConfig, apply_sis_class_defaults, local_search_one, verify_solution
 
 
@@ -140,7 +140,7 @@ def main() -> None:
     gamma = int(inst["gamma"])
     pid = int(inst.get("id", 1))
     sis_class = problem_class_from_id(pid)
-    require_norm_ge_q2 = effective_require_norm_ge_q2(inst, sis_class)
+    require_norm_lt_q2 = effective_require_norm_lt_q2(inst, sis_class)
 
     best_rec: Dict[str, Any] = {}
     round_idx = 0
@@ -152,8 +152,8 @@ def main() -> None:
         cfg = apply_sis_class_defaults(
             _cfg_for_round(round_idx, seed), sis_class, aggressive=round_idx >= 8
         )
-        u, v, meta = local_search_one(A, t, q, gamma, cfg, require_norm_ge_q2)
-        ok, verify = verify_solution(A, t, q, gamma, u, v, require_norm_ge_q2)
+        u, v, meta = local_search_one(A, t, q, gamma, cfg, require_norm_lt_q2)
+        ok, verify = verify_solution(A, t, q, gamma, u, v, require_norm_lt_q2)
         rec = {
             "round": round_idx,
             "seed": seed,

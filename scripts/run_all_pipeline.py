@@ -1,18 +1,25 @@
 """
 全赛题（1–10，三类）批量流水线：启发式 batch → ILP 收尾 → 汇总报告。
 
-默认策略（基于题 1/3 实验）
-----------------------------
+算法栈（2026 全量接入）
+------------------------
+- 类一：BKZ 2.0 + list sieve + Wagner + 核游走 + full CP-SAT
+- 类二：Kannan 嵌入 + CVP 提升 + full CP-SAT
+- 类三：受限 SVP + sieve + lex CP-SAT + 欧氏抛光（norm_sq < q²）
+
+默认策略
+--------
 - 第一类 1/3/6/9：batch + full ILP，跳过 sub-BKZ
 - 第二类 2/4/7/10：batch + full ILP（CVP 种子由 ``apply_sis_class_defaults`` 启用）
 - 第三类 5/8：batch + lex ILP + 欧氏抛光
 
 用法（项目根目录）::
 
-  # 快速筛查（短 batch、短 ILP，约数小时量级）
-  python3 scripts/run_all_pipeline.py --quick
+  bash scripts/run_server_validation.sh
+  python3 scripts/check_algorithms.py
+  python3 scripts/run_full_validation.py --quick
 
-  # 正式长跑（每题 batch 6 轮 + ILP 3600s，总计可达数日）
+  # 正式长跑（每题 batch 6 轮 + ILP 3600s）
   python3 scripts/run_all_pipeline.py --batch-rounds 6 --ilp-time-limit 3600
 
   # 只跑第二类

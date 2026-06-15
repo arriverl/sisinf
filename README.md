@@ -1,8 +1,29 @@
 # 2026 密码数学挑战赛赛题一：SIS∞ 解题工作区
 
-本目录用于完成“无穷范数下的短整数解问题求解（SIS∞）”赛题，包含：
+**开源地址：** [https://github.com/arriverl/sisinf](https://github.com/arriverl/sisinf)
 
-- 前置知识梳理与可复现实验方法；
+### 全算法验证（2026 接入）
+
+| 类别 | 新增/启用模块 | 验证命令 |
+|------|---------------|----------|
+| 一 | `lattice_sieve.py`（BKZ+list sieve） | `python scripts/run_full_validation.py --problems 1,3,6,9` |
+| 二 | `lattice_kannan.py`（Kannan 嵌入，需 fpylll） | `--problems 2,4,7,10` |
+| 三 | `lattice_restricted_svp.py`（受限 SVP）+ `norm_sq < q²` | `--problems 5,8` |
+| 全十题 | `run_full_validation.py` + 阶梯计分 `sis_scoring.py` | `python scripts/run_full_validation.py --quick` |
+
+冒烟：`python scripts/smoke_algorithms.py`
+
+**服务器部署（推荐 Linux + fpylll）：**
+
+```bash
+conda install -c conda-forge fpylll
+pip install numpy ortools
+bash scripts/run_server_validation.sh
+```
+
+报告输出：`results/full_validation/full_validation_report.json`（含阶梯计分）
+
+本目录用于完成“无穷范数下的短整数解问题求解（SIS∞）”赛题，包含：
 - 一个可批量求解的脚本框架；
 - 标准化输入/输出格式，便于提交与复核。
 
@@ -29,7 +50,7 @@
 |------|------|------|----------|
 | 第一类 | 1、3、6、9 | 齐次 SIS（`t≡0`） | BKZ/LLL 短向量种子、模 `q` 核游走、禁止平凡零解 |
 | 第二类 | 2、4、7、10 | 非齐次 SIS（`t≢0`） | CVP 提升种子、模拉回、弱化 BKZ |
-| 第三类 | 5、8 | 在 L∞ 可行外另需 `‖u‖₂²+‖v‖₂² ≥ q²` | 欧氏权重与熵引导（脚本对 5/8 自动开启该校验） |
+| 第三类 | 5、8 | 在 L∞ 可行外另需 `‖u‖₂²+‖v‖₂² < q²` | 受限 SVP + 熵分散 + lex ILP（脚本对 5/8 自动开启） |
 
 题号与类别映射见 `scripts/sis_problem_taxonomy.py`；批量求解第一类：
 
@@ -127,13 +148,13 @@ python scripts/run_class1_until_success.py --json-dir saiti1/sis_inf_problems_js
 - 对 `n=100~160`、`gamma` 相对较小的盒约束，单坐标小步调整具备较高性价比；
 - 工程上只依赖 `numpy`，便于复现实验和参数消融。
 
-## 3.3 对第 5/8 题额外欧氏约束的处理
+## 3.3 对第 5/8 题欧氏上界约束
 
-题面 OCR 可能丢失平方上标。脚本默认采用可行解释：
+题面 OCR 可能丢失平方上标。官方解析采用：
 
-`||u||_2^2 + ||v||_2^2 >= q^2`
+`‖u‖_2^2 + ‖v‖_2^2 < q^2`
 
-若实例要求该约束，脚本会在验证阶段额外检查，不满足则继续搜索。
+若 `≥ q²` 则不得分。脚本对第三类强制 `require_norm_lt_q2`；搜索用稀疏化 + `euclid_excess` 惩罚控制 `L₂` 能量。
 
 ---
 
@@ -256,7 +277,7 @@ python scripts/run_ablation.py \
 
 - 同余约束：`A v + u == t (mod q)`；
 - 无穷范数：`max(abs(u)) <= gamma` 且 `max(abs(v)) <= gamma`；
-- 若要求：`||u||_2^2 + ||v||_2^2 >= q^2`；
+- 若要求：`‖u‖_2^2 + ‖v‖_2^2 < q^2`（第三类）；
 - 齐次题非平凡性：`u,v` 不能同时全零；
 - 输出运行时间与搜索统计。
 

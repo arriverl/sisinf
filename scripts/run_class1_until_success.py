@@ -25,7 +25,7 @@ from run_problem1_until_success import _cfg_for_round
 from sis_problem_taxonomy import (
     CLASS_1_IDS,
     class_label,
-    effective_require_norm_ge_q2,
+    effective_require_norm_lt_q2,
     problem_class_from_id,
 )
 from solve_sisinf import apply_sis_class_defaults, local_search_one, verify_solution
@@ -70,7 +70,7 @@ def main() -> None:
         A = np.array(inst["A"], dtype=np.int64)
         t = np.array(inst["t"], dtype=np.int64)
         q, gamma = int(inst["q"]), int(inst["gamma"])
-        require_norm = effective_require_norm_ge_q2(inst, cls)
+        require_norm = effective_require_norm_lt_q2(inst, cls)
 
         round_idx = 0
         best: Dict[str, Any] = {}

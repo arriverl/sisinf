@@ -21,7 +21,7 @@ if _script_dir not in sys.path:
 from sis_finish_ops import collect_sub_bkz_v_seeds, run_ilp_finish
 from sis_problem_taxonomy import (
     class_label,
-    effective_require_norm_ge_q2,
+    effective_require_norm_lt_q2,
     problem_class_from_id,
     problem_class_from_instance,
 )
@@ -45,17 +45,17 @@ def better_verify(
     a: Dict[str, int],
     b: Dict[str, int],
     *,
-    require_norm_ge_q2: bool = False,
+    require_norm_lt_q2: bool = False,
 ) -> bool:
-    """未可行时比较进展；第三类在 L∞ 相同时优先 norm_req_ok 与更大 norm_sq。"""
+    """未可行时比较进展；第三类在 L∞ 相同时优先 norm_req_ok（< q²）与更小 norm_sq。"""
     if not b:
         return True
 
     def key(v: Dict[str, int]) -> tuple:
         inf_max = max(v.get("inf_u", 999), v.get("inf_v", 999))
         base = (v.get("congruence_ok", 0), -inf_max)
-        if require_norm_ge_q2:
-            return base + (v.get("norm_req_ok", 0), v.get("norm_sq", 0))
+        if require_norm_lt_q2:
+            return base + (v.get("norm_req_ok", 0), -v.get("norm_sq", 0))
         return base + (-v.get("norm_sq", 0),)
 
     return key(a) > key(b)
@@ -101,7 +101,7 @@ def execute_finish(
     q, gamma = int(inst["q"]), int(inst["gamma"])
     pid = int(inst.get("id", inc.get("id", 0)))
     sis_class = problem_class_from_instance(inst)
-    require_norm = effective_require_norm_ge_q2(inst, sis_class)
+    require_norm = effective_require_norm_lt_q2(inst, sis_class)
     mode = ilp_mode or default_ilp_mode_for_class(sis_class)
     do_polish = euclid_polish if euclid_polish is not None else (sis_class == 3)
 
@@ -155,7 +155,7 @@ def execute_finish(
                 f"norm_ok={ver_ilp.get('norm_req_ok')} status={meta.get('ilp_status_name')} "
                 f"time={meta.get('ilp_time_sec', 0):.1f}s"
             )
-            if better_verify(ver_ilp, best_verify, require_norm_ge_q2=require_norm):
+            if better_verify(ver_ilp, best_verify, require_norm_lt_q2=require_norm):
                 best_u, best_v = u_ilp.copy(), v_ilp.copy()
                 best_verify = ver_ilp
                 report["success"] = bool(ok_ilp)
@@ -199,7 +199,7 @@ def execute_finish(
             f"[finish p{pid}] polish: ok={ok_p} inf_u={ver_p.get('inf_u')} norm_sq={ver_p.get('norm_sq')} "
             f"norm_ok={ver_p.get('norm_req_ok')}"
         )
-        if better_verify(ver_p, best_verify, require_norm_ge_q2=require_norm):
+        if better_verify(ver_p, best_verify, require_norm_lt_q2=require_norm):
             best_u, best_v = u_p.copy(), v_p.copy()
             best_verify = ver_p
             report["success"] = bool(ok_p)
@@ -255,7 +255,7 @@ def execute_finish(
             "seed_count": len(prepend),
         }
         log(f"[finish p{pid}] sub-BKZ LS: inf_u={ver_ls.get('inf_u')} inf_v={ver_ls.get('inf_v')}")
-        if better_verify(ver_ls, best_verify, require_norm_ge_q2=require_norm):
+        if better_verify(ver_ls, best_verify, require_norm_lt_q2=require_norm):
             best_u, best_v = u_ls.copy(), v_ls.copy()
             best_verify = ver_ls
             report["success"] = bool(ok_ls)

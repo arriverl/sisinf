@@ -21,7 +21,7 @@ if _script_dir not in os.path.dirname(os.path.abspath(__file__)) and _script_dir
     sys.path.insert(0, _script_dir)
 
 from run_problem1_until_success import _cfg_for_round
-from sis_problem_taxonomy import CLASS_1_IDS, class_label, effective_require_norm_ge_q2
+from sis_problem_taxonomy import CLASS_1_IDS, class_label, effective_require_norm_lt_q2
 from solve_sisinf import (
     SearchConfig,
     apply_sis_class_defaults,
@@ -138,7 +138,7 @@ def trace_one(pid: int, json_dir: str, round_idx: int, seed_base: int, quick: bo
             bkz_beta=0,
             block_cp_every=0 if cfg.block_cp_every > 100 else cfg.block_cp_every,
         )
-    require_norm = effective_require_norm_ge_q2(inst, 1)
+    require_norm = effective_require_norm_lt_q2(inst, 1)
 
     report: Dict[str, Any] = {
         "problem_id": pid,
@@ -148,7 +148,7 @@ def trace_one(pid: int, json_dir: str, round_idx: int, seed_base: int, quick: bo
         "instance": {
             "n": n, "m": m, "q": q, "gamma": gamma,
             "homogeneous": homogeneous,
-            "require_norm_ge_q2": require_norm,
+            "require_norm_lt_q2": require_norm,
         },
         "framework": "Dual-Space + Entropy IIR-CLS（第一类叠加 SVP/BKZ + kernel walk）",
         "phases": [],

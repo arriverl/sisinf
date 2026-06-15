@@ -4,7 +4,7 @@ SIS∞ 2026 赛题一 — 主求解器（多 restart 局部搜索 + 格种子 + 
 问题
 ----
 求 ``u ∈ Z^n``, ``v ∈ Z^m`` 使得 ``A v + u ≡ t (mod q)``，
-且 ``|u|_∞, |v|_∞ ≤ γ``。第三类题另需 ``||u||_2^2 + ||v||_2^2 ≥ q^2``；
+且 ``|u|_∞, |v|_∞ ≤ γ``。第三类题另需 ``||u||_2^2 + ||v||_2^2 < q^2``（官方计分）；
 齐次 ``t≡0`` 时拒绝平凡解 ``u=v=0``。
 
 核心变量
@@ -16,7 +16,10 @@ SIS∞ 2026 赛题一 — 主求解器（多 restart 局部搜索 + 格种子 + 
 --------
 - ``SearchConfig`` / ``apply_sis_class_defaults``：搜索与三类题默认参数
 - ``build_dual_space_candidates``：dual / pull / CVP / 随机盒种子
-- ``lattice_bkz.collect_bkz_v_seeds``：第一类 BKZ 短向量种子（可选）
+- ``lattice_bkz``：BKZ 2.0 种子
+- ``lattice_sieve``：BKZ + list sieve（第一类/第三类）
+- ``lattice_kannan``：Kannan 嵌入 CVP 种子（第二类，需 fpylll）
+- ``lattice_restricted_svp``：受限 SVP 盒内搜索（第三类）
 - ``modq_kernel``：kernel walk 的模 q 核基
 - ``_single_restart_inner``：单 restart 主循环（坐标下降、CP、kernel、LS）
 - ``local_search_one``：多 restart 编排（可 ProcessPool 并行）
@@ -92,6 +95,11 @@ class SearchConfig:
     bkz_max_dim: int = 96  # n+m 超过则跳过 BKZ
     bkz_combo_depth: int = 0  # 约化基前 k 列小整数组合（类 1）
     bkz_combo_coeff_max: int = 2
+    use_sieve_seeds: bool = False  # BKZ 后缀 list sieve（类 1/3）
+    use_kannan_seeds: bool = False  # Kannan 嵌入 CVP 种子（类 2）
+    use_restricted_svp_seeds: bool = False  # Wang 型 L∞ 盒直接搜索（类 3）
+    restricted_svp_samples: int = 400
+    kannan_embedding_factor: int = 0  # 0 = 自动
 
     # --- 邻域算子 ---
     pair_relief_every: int = 32  # 双坐标联合移动周期；0 关
@@ -236,16 +244,20 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
                 "cheap_lll_trials": max(cfg.cheap_lll_trials, 50 if aggressive else 30),
                 "residual_phase_end": 0.58,
                 "kernel_phase_start": 0.78,
+                "use_sieve_seeds": True,
+                "use_kannan_seeds": False,
+                "use_restricted_svp_seeds": False,
             }
         )
     if sis_class == 2:
         cvp = 14 if aggressive else 10
         pull = 10 if aggressive else 8
+        kb = 28 if aggressive else 24
         return SearchConfig(
             **{
                 **asdict(cfg),
                 "use_bkz_seeds": False,
-                "bkz_beta": 0,
+                "bkz_beta": kb,
                 "bkz_combo_depth": 0,
                 "cvp_lift_variants": max(cvp, cfg.cvp_lift_variants),
                 "modular_pull_variants": max(pull, cfg.modular_pull_variants),
@@ -257,6 +269,11 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
                 "kernel_phase_start": 0.70,
                 "cp_periodic_every": cfg.cp_periodic_every if cfg.cp_periodic_every > 0 else 80,
                 "block_cp_every": cfg.block_cp_every if cfg.block_cp_every > 0 else 55,
+                "use_sieve_seeds": False,
+                "use_kannan_seeds": True,
+                "use_restricted_svp_seeds": False,
+                "bkz_max_dim": 200,
+                "bkz_max_vectors": 24,
             }
         )
     euclid = 4.0 if aggressive else 3.0
@@ -279,6 +296,10 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
             "kernel_phase_start": 0.45,
             "block_cp_every": cfg.block_cp_every if cfg.block_cp_every > 0 else 50,
             "block_cp_time_limit": max(3.0, cfg.block_cp_time_limit),
+            "use_sieve_seeds": True,
+            "use_kannan_seeds": False,
+            "use_restricted_svp_seeds": True,
+            "restricted_svp_samples": 600 if aggressive else 400,
         }
     )
 
@@ -379,13 +400,14 @@ def energy_from_parts(
     norm_sq: float,
     entropy: float,
     q: int,
-    require_norm_ge_q2: bool,
+    require_norm_lt_q2: bool,
     cfg: SearchConfig,
     progress: float,
     topk_u_pen: float = 0.0,
 ) -> Tuple[float, Dict[str, float]]:
     """Energy without recomputing objective (viol/overflow already known)."""
-    euclid_gap = max(0.0, float(q * q) - norm_sq) if require_norm_ge_q2 else 0.0
+    # 第三类官方：须 norm_sq < q²；超出则惩罚
+    euclid_excess = max(0.0, norm_sq - float(q * q) + 1.0) if require_norm_lt_q2 else 0.0
     euclid_w, entropy_w = _schedule_weights(cfg, progress)
     cheby_w = cfg.cheby_weight
     if max_overflow >= cfg.cheby_boost_threshold:
@@ -395,7 +417,7 @@ def energy_from_parts(
         + cheby_w * max_overflow
         + cfg.overflow_weight * overflow_sum
         + cfg.energy_topk_weight * topk_u_pen
-        + euclid_w * euclid_gap
+        + euclid_w * euclid_excess
         - entropy_w * entropy
     )
     return energy, {
@@ -403,7 +425,7 @@ def energy_from_parts(
         "overflow_sum": float(overflow_sum),
         "max_overflow": float(max_overflow),
         "norm_sq": norm_sq,
-        "euclid_gap": euclid_gap,
+        "euclid_excess": euclid_excess,
         "cheby_weight": cheby_w,
         "topk_u_pen": topk_u_pen,
         "entropy": entropy,
@@ -416,7 +438,7 @@ def energy_score(
     v: np.ndarray,
     gamma: int,
     q: int,
-    require_norm_ge_q2: bool,
+    require_norm_lt_q2: bool,
     cfg: SearchConfig,
     progress: float,
     *,
@@ -437,7 +459,7 @@ def energy_score(
         norm_sq,
         entropy,
         q,
-        require_norm_ge_q2,
+        require_norm_lt_q2,
         cfg,
         progress,
         topk_u_pen=tk,
@@ -448,7 +470,7 @@ def should_compute_entropy(
     cfg: SearchConfig,
     step: int,
     viol: int,
-    require_norm_ge_q2: bool,
+    require_norm_lt_q2: bool,
     progress: float,
 ) -> bool:
     if cfg.entropy_disable_after_progress < 1.0 and progress >= cfg.entropy_disable_after_progress:
@@ -458,7 +480,7 @@ def should_compute_entropy(
     if cfg.entropy_update_interval <= 0:
         return False
     # Respect interval even when viol==0 (otherwise inner loops compute histograms every delta).
-    if require_norm_ge_q2 and viol == 0:
+    if require_norm_lt_q2 and viol == 0:
         # Euclidean phase: slightly denser entropy than coarse phase (still capped).
         denser = max(1, cfg.entropy_update_interval // 4)
         return step % denser == 0
@@ -472,16 +494,10 @@ def verify_solution(
     gamma: int,
     u: np.ndarray,
     v: np.ndarray,
-    require_norm_ge_q2: bool = False,
+    require_norm_lt_q2: bool = False,
 ) -> Tuple[bool, Dict[str, int]]:
     """
-    官方一致性校验：同余、L∞ 盒、可选欧氏下界、齐次非平凡。
-
-    Returns
-    -------
-    ok : bool
-    metrics : dict
-        congruence_ok, inf_u, inf_v, norm_sq, norm_req_ok, nontrivial_ok（0/1）
+    官方一致性校验：同余、L∞ 盒、第三类欧氏上界 ``norm_sq < q^2``、齐次非平凡。
     """
     lhs = (A @ v + u - t) % q
     congr_ok = bool(np.all(lhs == 0))
@@ -489,12 +505,15 @@ def verify_solution(
     inf_v = int(np.max(np.abs(v)))
     inf_ok = inf_u <= gamma and inf_v <= gamma
     norm_sq = int(np.dot(u, u) + np.dot(v, v))
-    norm_ok = True if not require_norm_ge_q2 else norm_sq >= q * q
-    # For homogeneous SIS (t == 0), reject the trivial all-zero solution.
+    if require_norm_lt_q2:
+        norm_ok = norm_sq < q * q
+    else:
+        norm_ok = True
     is_homogeneous = bool(np.all(t % q == 0))
     nontrivial_ok = True if not is_homogeneous else bool(np.any(u != 0) or np.any(v != 0))
     ok = congr_ok and inf_ok and norm_ok and nontrivial_ok
     return ok, {
+        "ok": int(ok),
         "congruence_ok": int(congr_ok),
         "inf_u": inf_u,
         "inf_v": inf_v,
@@ -1075,7 +1094,7 @@ def _single_restart_inner(
     gamma: int,
     cols: List[np.ndarray],
     cfg: SearchConfig,
-    require_norm_ge_q2: bool,
+    require_norm_lt_q2: bool,
     rng: np.random.Generator,
     restart_idx: int,
     v_init: np.ndarray,
@@ -1114,7 +1133,7 @@ def _single_restart_inner(
             break
         progress = (step + 1) / max(cfg.iters, 1)
         improved = False
-        use_entropy = should_compute_entropy(cfg, step, score[0], require_norm_ge_q2, progress)
+        use_entropy = should_compute_entropy(cfg, step, score[0], require_norm_lt_q2, progress)
         in_residual_phase = progress < cfg.residual_phase_end
         in_kernel_phase = progress >= cfg.kernel_phase_start
 
@@ -1167,7 +1186,7 @@ def _single_restart_inner(
                 norm_sq_curr,
                 entropy_curr,
                 q,
-                require_norm_ge_q2,
+                require_norm_lt_q2,
                 cfg,
                 progress,
                 tk_curr,
@@ -1200,7 +1219,7 @@ def _single_restart_inner(
                     norm_sq_cand,
                     entropy_cand,
                     q,
-                    require_norm_ge_q2,
+                    require_norm_lt_q2,
                     cfg,
                     progress,
                     tkc,
@@ -1250,7 +1269,7 @@ def _single_restart_inner(
                             norm_sq_new,
                             entropy_new,
                             q,
-                            require_norm_ge_q2,
+                            require_norm_lt_q2,
                             cfg,
                             progress,
                             tkn,
@@ -1297,7 +1316,7 @@ def _single_restart_inner(
                     norm_sq_curr,
                     entropy_curr,
                     q,
-                    require_norm_ge_q2,
+                    require_norm_lt_q2,
                     cfg,
                     progress,
                     tk_curr,
@@ -1332,7 +1351,7 @@ def _single_restart_inner(
                         norm_sq_cand,
                         entropy_cand,
                         q,
-                        require_norm_ge_q2,
+                        require_norm_lt_q2,
                         cfg,
                         progress,
                         tkc2,
@@ -1430,7 +1449,7 @@ def _single_restart_inner(
 
         if score[0] == 0:
             u = residual.copy()
-            ok, metrics = verify_solution(A, t, q, gamma, u, v, require_norm_ge_q2)
+            ok, metrics = verify_solution(A, t, q, gamma, u, v, require_norm_lt_q2)
             if ok:
                 return (
                     True,
@@ -1663,7 +1682,7 @@ def _single_restart_inner(
             )
             if rep2 is not None:
                 u2, v2 = rep2
-                ok2, met2 = verify_solution(A, t, q, gamma, u2, v2, require_norm_ge_q2)
+                ok2, met2 = verify_solution(A, t, q, gamma, u2, v2, require_norm_lt_q2)
                 if ok2:
                     return (
                         True,
@@ -1726,7 +1745,7 @@ def _single_restart_inner(
                     score = (viol, osum, maxov)
                     vv_sq = int(np.dot(v.astype(np.int64), v.astype(np.int64)))
                     improved = True
-                    ok_agg, met_agg = verify_solution(A, t, q, gamma, residual, v, require_norm_ge_q2)
+                    ok_agg, met_agg = verify_solution(A, t, q, gamma, residual, v, require_norm_lt_q2)
                     if ok_agg:
                         return (
                             True,
@@ -1752,7 +1771,7 @@ def _single_restart_inner(
             )
             if repaired is not None:
                 u_rep, v_rep = repaired
-                ok, metrics = verify_solution(A, t, q, gamma, u_rep, v_rep, require_norm_ge_q2)
+                ok, metrics = verify_solution(A, t, q, gamma, u_rep, v_rep, require_norm_lt_q2)
                 if ok:
                     return (
                         True,
@@ -1790,7 +1809,7 @@ def _parallel_restart_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
     q = int(payload["q"])
     gamma = int(payload["gamma"])
     cfg = SearchConfig(**payload["cfg"])
-    require_norm_ge_q2 = bool(payload["require_norm_ge_q2"])
+    require_norm_lt_q2 = bool(payload["require_norm_lt_q2"])
     restart_idx = int(payload["restart_idx"])
     total_restarts = int(payload["total_restarts"])
     v_init = np.asarray(payload["v_init"], dtype=np.int64)
@@ -1805,7 +1824,7 @@ def _parallel_restart_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
         gamma,
         cols,
         cfg,
-        require_norm_ge_q2,
+        require_norm_lt_q2,
         rng,
         restart_idx,
         v_init,
@@ -1828,7 +1847,7 @@ def local_search_one(
     q: int,
     gamma: int,
     cfg: SearchConfig,
-    require_norm_ge_q2: bool = False,
+    require_norm_lt_q2: bool = False,
     prepend_v_seeds: Optional[List[np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
@@ -1856,6 +1875,25 @@ def local_search_one(
             if pv.size == m:
                 lattice_prepend.append(pv.copy())
     lattice_backend = "none"
+    seed_sources: List[str] = []
+    if cfg.use_restricted_svp_seeds:
+        try:
+            from lattice_restricted_svp import collect_restricted_svp_v_seeds
+
+            rs = collect_restricted_svp_v_seeds(
+                A,
+                t,
+                q,
+                gamma,
+                rng,
+                max(16, cfg.bkz_max_vectors),
+                n_random=cfg.restricted_svp_samples,
+                require_norm_lt_q2=require_norm_lt_q2,
+            )
+            lattice_prepend.extend(rs)
+            seed_sources.append(f"restricted_svp:{len(rs)}")
+        except Exception:
+            pass
     if cfg.use_wagner_seeds:
         try:
             from sis_advanced_u_ops import wagner_subsystem_seeds
@@ -1876,23 +1914,61 @@ def local_search_one(
             )
         except Exception:
             pass
-    if cfg.use_bkz_seeds and cfg.bkz_beta > 0:
+    if cfg.use_kannan_seeds and cfg.bkz_beta > 0:
         try:
-            from lattice_bkz import collect_bkz_v_seeds, lattice_backend_label
+            from lattice_kannan import collect_kannan_v_seeds
 
-            bkz_seeds = collect_bkz_v_seeds(
+            kn = collect_kannan_v_seeds(
                 A,
+                t,
                 q,
                 gamma,
                 cfg.bkz_beta,
-                cfg.bkz_max_vectors,
+                max(16, cfg.bkz_max_vectors // 2),
                 cfg.bkz_max_dim,
-                combo_depth=cfg.bkz_combo_depth,
-                combo_coeff_max=cfg.bkz_combo_coeff_max,
-                rng=rng,
-                bkz_tours=2,
+                rng,
+                embedding_factor=cfg.kannan_embedding_factor or None,
             )
+            lattice_prepend.extend(kn)
+            seed_sources.append(f"kannan:{len(kn)}")
+        except Exception:
+            pass
+    if cfg.use_bkz_seeds and cfg.bkz_beta > 0:
+        try:
+            if cfg.use_sieve_seeds:
+                from lattice_sieve import collect_sieve_v_seeds
+
+                bkz_seeds = collect_sieve_v_seeds(
+                    A,
+                    q,
+                    gamma,
+                    cfg.bkz_beta,
+                    cfg.bkz_max_vectors,
+                    cfg.bkz_max_dim,
+                    rng,
+                    combo_depth=cfg.bkz_combo_depth,
+                    combo_coeff_max=cfg.bkz_combo_coeff_max,
+                )
+                seed_sources.append("bkz+sieve")
+            else:
+                from lattice_bkz import collect_bkz_v_seeds
+
+                bkz_seeds = collect_bkz_v_seeds(
+                    A,
+                    q,
+                    gamma,
+                    cfg.bkz_beta,
+                    cfg.bkz_max_vectors,
+                    cfg.bkz_max_dim,
+                    combo_depth=cfg.bkz_combo_depth,
+                    combo_coeff_max=cfg.bkz_combo_coeff_max,
+                    rng=rng,
+                    bkz_tours=2,
+                )
+                seed_sources.append("bkz")
             lattice_prepend.extend(bkz_seeds)
+            from lattice_bkz import lattice_backend_label
+
             lattice_backend = lattice_backend_label()
         except Exception:
             lattice_backend = "error"
@@ -1902,6 +1978,7 @@ def local_search_one(
         "num_candidates": 0,
         "lattice_backend": lattice_backend,
         "lattice_seed_count": len(lattice_prepend),
+        "seed_sources": seed_sources,
     }
 
     if cfg.use_dual_space:
@@ -1945,7 +2022,7 @@ def local_search_one(
                     "q": q,
                     "gamma": gamma,
                     "cfg": asdict(cfg),
-                    "require_norm_ge_q2": require_norm_ge_q2,
+                    "require_norm_lt_q2": require_norm_lt_q2,
                     "restart_idx": restart,
                     "total_restarts": cfg.restarts,
                     "v_init": v0.tolist(),
@@ -1978,13 +2055,13 @@ def local_search_one(
                 best_global = score_t
                 v_arr = np.asarray(r["v"], dtype=np.int64)
                 u_arr = np.asarray(r["u"], dtype=np.int64)
-                ok, metrics = verify_solution(A, t, q, gamma, u_arr, v_arr, require_norm_ge_q2)
+                ok, metrics = verify_solution(A, t, q, gamma, u_arr, v_arr, require_norm_lt_q2)
                 _, energy_meta = energy_score(
                     u_arr,
                     v_arr,
                     gamma,
                     q,
-                    require_norm_ge_q2,
+                    require_norm_lt_q2,
                     cfg,
                     1.0,
                 )
@@ -2033,7 +2110,7 @@ def local_search_one(
             gamma,
             cols,
             cfg,
-            require_norm_ge_q2,
+            require_norm_lt_q2,
             rng,
             restart,
             v_init,
@@ -2045,13 +2122,13 @@ def local_search_one(
 
         if best_global is None or better_score(score, best_global):
             best_global = score
-            ok, metrics = verify_solution(A, t, q, gamma, u_out, v_out, require_norm_ge_q2)
+            ok, metrics = verify_solution(A, t, q, gamma, u_out, v_out, require_norm_lt_q2)
             _, energy_meta = energy_score(
                 u_out,
                 v_out,
                 gamma,
                 q,
-                require_norm_ge_q2,
+                require_norm_lt_q2,
                 cfg,
                 1.0,
             )
@@ -2090,16 +2167,16 @@ def solve_instances(instances: List[Dict], cfg: SearchConfig) -> List[Dict]:
         t = np.array(inst["t"], dtype=np.int64)
         try:
             from sis_problem_taxonomy import (
-                effective_require_norm_ge_q2,
+                effective_require_norm_lt_q2,
                 problem_class_from_instance,
             )
 
             sis_class = problem_class_from_instance(inst)
-            require_norm_ge_q2 = effective_require_norm_ge_q2(inst, sis_class)
+            require_norm_lt_q2 = effective_require_norm_lt_q2(inst, sis_class)
             local_cfg = apply_sis_class_defaults(cfg, sis_class)
         except Exception:
             sis_class = 0
-            require_norm_ge_q2 = bool(inst.get("require_norm_ge_q2", False))
+            require_norm_lt_q2 = bool(inst.get("require_norm_lt_q2", False))
             local_cfg = cfg
         local_cfg = replace(local_cfg, seed=seed_base + idx)
         t0 = time.time()
@@ -2109,10 +2186,10 @@ def solve_instances(instances: List[Dict], cfg: SearchConfig) -> List[Dict]:
             q=q,
             gamma=gamma,
             cfg=local_cfg,
-            require_norm_ge_q2=require_norm_ge_q2,
+            require_norm_lt_q2=require_norm_lt_q2,
         )
         elapsed = time.time() - t0
-        ok, verify = verify_solution(A, t, q, gamma, u, v, require_norm_ge_q2)
+        ok, verify = verify_solution(A, t, q, gamma, u, v, require_norm_lt_q2)
 
         out.append(
             {
@@ -2152,7 +2229,7 @@ def parse_args() -> argparse.Namespace:
         "--entropy-interval",
         type=int,
         default=50,
-        help="Histogram entropy every k steps (<=0 disables). Denser schedule when require_norm_ge_q2 and viol==0.",
+        help="Histogram entropy every k steps (<=0 disables). Denser schedule when require_norm_lt_q2 and viol==0.",
     )
     p.add_argument("--verbose", action="store_true", help="Print periodic progress to stderr.")
     p.add_argument("--log-every", type=int, default=500, help="Steps between progress lines when --verbose.")

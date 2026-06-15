@@ -37,7 +37,7 @@ from sis_problem_taxonomy import (
     CLASS_2_IDS,
     CLASS_3_IDS,
     class_label,
-    effective_require_norm_ge_q2,
+    effective_require_norm_lt_q2,
     problem_class_from_id,
 )
 from solve_sisinf import apply_sis_class_defaults, local_search_one, verify_solution
@@ -69,10 +69,15 @@ def _quick_cfg_patch(cfg, quick: bool):
 
     return replace(
         cfg,
-        restarts=max(8, cfg.restarts // 2),
-        iters=min(4000, cfg.iters),
-        timeout_sec=min(240.0, cfg.timeout_sec) if cfg.timeout_sec else 240.0,
+        restarts=max(4, cfg.restarts // 3),
+        iters=min(1200, cfg.iters),
+        timeout_sec=min(120.0, cfg.timeout_sec) if cfg.timeout_sec else 120.0,
         block_cp_every=0 if cfg.block_cp_every > 120 else cfg.block_cp_every,
+        use_sieve_seeds=False,
+        bkz_beta=min(20, cfg.bkz_beta) if cfg.bkz_beta > 0 else 0,
+        bkz_max_vectors=min(12, cfg.bkz_max_vectors),
+        restricted_svp_samples=min(120, cfg.restricted_svp_samples),
+        parallel_workers=1,
     )
 
 
@@ -80,19 +85,21 @@ def _better(verify: Dict[str, int], prev: Dict[str, int]) -> bool:
     """
     比较两轮 verify 字典，判断当前是否更优（未可行时保留最佳进展）。
 
-    优先级：同余成立 > L∞ 更小 > norm_sq 更大（第三类欧氏下界方向）。
+    优先级：同余成立 > L∞ 更小 > norm_req_ok（第三类 <q²）> 更小 norm_sq。
     """
     if not prev:
         return True
     key = (
         verify.get("congruence_ok", 0),
         -max(verify.get("inf_u", 999), verify.get("inf_v", 999)),
-        -verify.get("norm_sq", 0),
+        verify.get("norm_req_ok", 1),
+        verify.get("norm_sq", 0),
     )
     pkey = (
         prev.get("congruence_ok", 0),
         -max(prev.get("inf_u", 999), prev.get("inf_v", 999)),
-        -prev.get("norm_sq", 0),
+        prev.get("norm_req_ok", 1),
+        prev.get("norm_sq", 0),
     )
     return key > pkey
 
@@ -118,7 +125,7 @@ def solve_one(
     A = np.array(inst["A"], dtype=np.int64)
     t = np.array(inst["t"], dtype=np.int64)
     q, gamma = int(inst["q"]), int(inst["gamma"])
-    require_norm = effective_require_norm_ge_q2(inst, sis_class)
+    require_norm = effective_require_norm_lt_q2(inst, sis_class)
 
     best: Dict[str, Any] = {
         "id": pid,
@@ -147,7 +154,7 @@ def solve_one(
             "success": bool(ok),
             "verify": verify,
             "meta": meta,
-            "require_norm_ge_q2": require_norm,
+            "require_norm_lt_q2": require_norm,
             "elapsed_sec": time.time() - t0,
         }
         latest = os.path.join(out_dir, f"problem{pid}_latest.json")
