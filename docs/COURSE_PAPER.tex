@@ -34,7 +34,7 @@
 
 \begin{abstract}
 \noindent
-短整数解（SIS）问题是格密码学的核心假设。2026 全国高校密码数学挑战赛赛题一在模 $q$ 下求 $\|u\|_{\infty},\|v\|_{\infty}\le\gamma$，并按官方解析将十道小问分为\textbf{格上近似 SVP}（第一类）、\textbf{格上近似 CVP}（第二类）与\textbf{特殊条件下近似 SVP}（第三类）。与以 $L_2$ 为目标的 BKZ 2.0 \cite{chen2011} 不同，赛题优化 Chebyshev 范数，且第三类在 $L_{\infty}$ 盒约束之外还要求 $\|u\|_2^2+\|v\|_2^2<q^2$，故“先 $L_2$ 约化再过滤”的路线被官方判定为\textbf{不可行} \cite{wang2025}。本文在残差主导双空间框架下，为三类题分别对接 BKZ+筛法种子、Kannan 嵌入/CVP 提升与受限 SVP 启发式 \cite{wang2025,dilithium2021}，并以阶梯计分规则 \cite{challenge2026} 给出\textbf{可行可得分解}：第一类四题（$\gamma=15$）可将 $\|(u,v)\|_{\infty}$ 压至 $42$--$45$ 获部分得分潜力，但距满分界 $\gamma$ 仍有约 $27$--$30$ 缺口；全维 CP-SAT 为当前唯一稳定压降手段。实现开源：\url{https://github.com/arriverl/sisinf}。
+短整数解（SIS）问题是格密码学的核心假设。2026 全国高校密码数学挑战赛赛题一在模 $q$ 下求 $\|u\|_{\infty},\|v\|_{\infty}\le\gamma$，并按官方解析将十道小问分为\textbf{格上近似 SVP}（第一类）、\textbf{格上近似 CVP}（第二类）与\textbf{特殊条件下近似 SVP}（第三类）。与以 $L_2$ 为目标的 BKZ 2.0 \cite{chen2011} 不同，赛题优化 Chebyshev 范数，且第三类在 $L_{\infty}$ 盒约束之外还要求 $\|u\|_2^2+\|v\|_2^2<q^2$，故“先 $L_2$ 约化再过滤”的路线被官方判定为\textbf{不可行} \cite{wang2025}。本文在残差主导双空间框架下，为三类题分别实现并对接 \textbf{BKZ 2.0 + list sieve}、\textbf{Kannan 嵌入}与\textbf{受限 SVP 盒内搜索}三类种子模块 \cite{chen2011,wang2025,dilithium2021}，配合字典序局部搜索与 CP-SAT 收尾，并以阶梯计分规则 \cite{challenge2026} 给出可行可得分解。第一类四题（$\gamma=15$）实验可将 $E_\infty$ 压至 $42$--$45$；第二、三类全量数值待服务器评测。实现开源：\url{https://github.com/arriverl/sisinf}。
 
 \vspace{0.5em}
 \noindent\textbf{关键词：}短整数解；无穷范数；格基约化；最近向量问题；局部搜索；约束规划
@@ -96,9 +96,9 @@ Ajtai \cite{ajtai1996} 首次证明：若存在高效算法在平均情况下求
     \toprule
     类别 & 文献/官方最优路线 & 本文可落地方案 & 当前实验可达 \\
     \midrule
-    一 & BKZ 2.0 + BDGL 筛法 $\to$ $L_2$ 短向量 & Ajtai 格 BKZ 种子 + $L_{\infty}$ 字典序搜索 + 全维 CP-SAT & $E_\infty\!=\!42$--$45$（0 分档$^\dagger$） \\
-    二 & Kannan 嵌入 + 调参 BKZ & CVP 提升 + 模拉回 + 同上流水线 & 待全量评测$^\ddagger$ \\
-    三 & 受限 SVP 启发式 \cite{wang2025} & 熵分散采样 + lex CP-SAT + 稀疏化抛光 & 待全量评测$^\ddagger$ \\
+    一 & BKZ 2.0 + BDGL 筛法 $\to$ $L_2$ 短向量 & BKZ + sieve + Wang $L_\infty$ slice + full CP-SAT & $E_\infty\!=\!42$--$45$（0 分档$^\dagger$） \\
+    二 & Kannan 嵌入 + 调参 BKZ & Kannan 嵌入种子 + CVP 提升 + 模拉回 + full CP-SAT & 待服务器评测$^\ddagger$ \\
+    三 & 受限 SVP 启发式 \cite{wang2025} & Wang enumerate-slice + BKZ/d4f + lex CP-SAT & 待服务器评测$^\ddagger$ \\
     \bottomrule
     \multicolumn{4}{l}{\footnotesize $^\dagger$距 $\gamma{+}4=19$ 仍远，阶梯计分 0 分；$^\ddagger$流水线见 \cite{sisinfrepo}。}
   \end{tabular}
@@ -112,7 +112,7 @@ Ajtai \cite{ajtai1996} 首次证明：若存在高效算法在平均情况下求
 
 \subsection{本文贡献}
 
-本文完成：（1）统一残差建模 $u=\mathrm{center}(t-Av)$；（2）按官方三类结构对接 BKZ 2.0+筛法、Kannan/CVP 与受限 SVP 思路 \cite{chen2011,wang2025}；（3）给出阶梯计分下的可行可得分解（表~\ref{tab:score-decomp}）；（4）第一类四题实验验证 $L_{\infty}$ 平台与 CP-SAT 收尾边界。代码见 \url{https://github.com/arriverl/sisinf}。
+本文完成：（1）统一残差建模 $u=\mathrm{center}(t-Av)$；（2）实现三类差异化种子模块（BKZ+sieve / Kannan / 受限 SVP）及 \texttt{apply\_sis\_class\_defaults} 自动调度；（3）集成 \texttt{run\_full\_validation.py} 十题验证与阶梯计分 \cite{challenge2026}；（4）第一类四题实验验证 $L_{\infty}$ 平台与 CP-SAT 收尾边界。代码见 \url{https://github.com/arriverl/sisinf}。
 
 % ==================== 2 原理 ====================
 \section{原理或方案设计}
@@ -164,9 +164,10 @@ Ajtai \cite{ajtai1996} 首次证明：若存在高效算法在平均情况下求
     \midrule
     格论定位 & 近似 SVP & 近似 CVP & 受限 SVP（$L_\infty$ 盒 $\cap$ $L_2$ 球） \\
     文献主线 & BKZ 2.0 + 筛法 \cite{chen2011,becker2016} & Kannan 嵌入 \cite{kannan1987} & 受限 SVP \cite{wang2025} \\
-    本文种子 & BKZ/LLL、Wagner & CVP 提升、模拉回 & 大规模采样 + 熵分散 \\
-    搜索侧重 & 核游走、$u$ 优先 & pull kick、模拉回 & 稀疏化、$L_2$ 上界 \\
-    ILP 收尾 & 全维 \texttt{full} & 全维 \texttt{full} & 分层 \texttt{lex} \\
+    本文实现模块 & \texttt{lattice\_bkz} + \texttt{lattice\_sieve} & \texttt{lattice\_kannan} + CVP 提升 & \texttt{lattice\_restricted\_svp} \\
+    本文种子 & BKZ + list sieve、Wagner & Kannan 嵌入、模拉回、$t{+}qk$ LS & 稀疏盒采样、熵引导 \\
+    搜索侧重 & 核游走、$u$ 优先 snap & pull kick、行投影 LS & 稀疏化、$L_2$ 上界惩罚 \\
+    ILP 收尾 & 全维 \texttt{full} & 全维 \texttt{full} & 分层 \texttt{lex} + 抛光 \\
     校验附加 & 非平凡 $u,v$ & 无 & $\|u\|_2^2+\|v\|_2^2<q^2$ \\
     \bottomrule
   \end{tabular}
@@ -181,17 +182,17 @@ Ajtai \cite{ajtai1996} 首次证明：若存在高效算法在平均情况下求
 \paragraph{问题特征。}
 $t\equiv 0\pmod q$，Ajtai 格 $B=[qI_n|-A;0,I_m]$ 的短向量后 $m$ 维为 $v$ 候选 \cite{ajtai1996,micciancio2002}。须排除 $u=v=0$。
 
-\paragraph{本文可落地方案（相对 BKZ+筛法的创新分解）。}
-受限于百维全维筛法算力，本文采取\textbf{可实现的分解链}：
+\paragraph{本文实现方案。}
+开源框架 \cite{sisinfrepo} 将上述分解落实为\textbf{三阶段流水线}：\texttt{apply\_sis\_class\_defaults} 按题号切换种子开关 $\to$ \texttt{local\_search\_one} 多重重启字典序搜索 $\to$ \texttt{execute\_finish} CP-SAT 收尾。第一类默认启用 \texttt{use\_sieve\_seeds}（模块 \texttt{lattice\_sieve}：BKZ 约化后对约化基做小系数 Gauss/list 合并，作为 BDGL 筛法的可落地轻量替代 \cite{becker2016}），并辅以 Wagner 子系统碰撞 \cite{wagner2002}。分解链为：
 \begin{enumerate}
-  \item \textbf{BKZ 2.0 种子层}：$n+m\le 160$ 时 $\beta\approx 28$--$32$ 多 block size 约化 \cite{chen2011,li2025weak}；$n+m>160$ 退化为 LLL；
-  \item \textbf{$L_{\infty}$ 转换层}：残差 $u=r(v)$ + 字典序 $(V,S,M)$ 局部搜索（核游走、$u$ 优先 snap 等），弥补“$L_2$ 短 $\not\to$ $L_{\infty}$ 短”；
-  \item \textbf{精确收尾层}：全维 CP-SAT 最小化 $\max_i(|u_i|-\gamma)_+$ \cite{achterberg2007,ortools2024}。
+  \item \textbf{BKZ 2.0 + list sieve 种子层}（\texttt{lattice\_bkz} + \texttt{lattice\_sieve}）：$n+m\le 160$ 时 $\beta\approx 28$--$32$ 多 block size 约化 \cite{chen2011,li2025weak}；$n+m>160$ 退化为 LLL；
+  \item \textbf{$L_{\infty}$ 转换层}：残差 $u=r(v)$ + 字典序 $(V,S,M)$ 局部搜索（核游走、$u$ 优先 snap、块级 CP 修补等）；
+  \item \textbf{精确收尾层}：全维 CP-SAT（\texttt{full}）最小化 $\max_i(|u_i|-\gamma)_+$ \cite{achterberg2007,ortools2024}。
 \end{enumerate}
-Wagner 子系统碰撞 \cite{wagner2002} 作辅助种子。该分解\textbf{目标与赛题 $L_{\infty}$ 一致}，且可在单机上复现。
+该实现\textbf{目标与赛题 $L_{\infty}$ 一致}；完整 BDGL 渐近筛法因算力与库接口限制未直接调用，list sieve 为工程折中。
 
 \paragraph{可得性结论。}
-实验表明（表~\ref{tab:class1}），该分解将 $E_\infty$ 稳定在 $42$--$45$（$\gamma=15$），同余与非平凡性可满足。\textbf{第一类当前可得分为 0 分档}（$E_\infty>\gamma{+}4$）；若要进入 2--10 分档，须将 $E_\infty$ 压至 $\gamma{+}4$ 以内，需引入真筛法或 Wang 型受限搜索 \cite{wang2025,becker2016}。
+实验表明（表~\ref{tab:class1}），该分解将 $E_\infty$ 稳定在 $42$--$45$（$\gamma=15$），同余与非平凡性可满足。\textbf{第一类当前可得分为 0 分档}（$E_\infty>\gamma{+}4$）；若要进入 2--10 分档，须将 $E_\infty$ 压至 $\gamma{+}4$ 以内，需进一步提升 sieve 质量（完整 BDGL）或加强 Wang 型受限搜索 \cite{wang2025,becker2016}。
 
 \subsection{第二类：非齐次近似 CVP 解题思路（题 2, 4, 7, 10）}
 \label{sec:class2}
@@ -199,14 +200,14 @@ Wagner 子系统碰撞 \cite{wagner2002} 作辅助种子。该分解\textbf{目�
 \paragraph{官方思路与文献对照。}
 第二类为\textbf{格上近似 CVP}。赛题解析推荐：（1）Kannan 嵌入将 CVP 归约为高维 SVP，再调用 BKZ 2.0 \cite{kannan1987,chen2011}——关键是\textbf{嵌入因子}选取与针对嵌入结构的 BKZ 调参；（2）或\textbf{直接在格上解近似 CVP}（Babai 最近平面等 \cite{babai1986}）。Dilithium 等方案在签名采样中处理模 $q$ 短向量与 $L_{\infty}$ 界 \cite{dilithium2021}，说明非齐次短向量在工程上可构造，但赛题维度与 $\gamma$ 远严于 NIST 参数。
 
-\paragraph{本文可落地方案。}
-百维全维 Kannan 嵌入 + 高 $\beta$ BKZ 在时限内不可行，本文采用\textbf{CVP 启发式分解链}：
+\paragraph{本文实现方案。}
+模块 \texttt{lattice\_kannan} 构造 Ajtai 格上的 Kannan 嵌入（维数 $d{+}1$，$d=n+m$），对嵌入格运行 BKZ 2.0，从短向量末维 $\pm 1$ 分量提取 $v$ 候选；与 CVP 启发式并行启用（\texttt{use\_kannan\_seeds=True}，\texttt{use\_bkz\_seeds=False}）。分解链为：
 \begin{enumerate}
-  \item \textbf{目标贴近层}：多组稀疏 $k$ 的 $t'=t+qk$ 受限最小二乘 + 多形态模拉回 $v\propto -A^\top\phi(\mathrm{center}(t))$；
+  \item \textbf{Kannan + CVP 种子层}：Kannan 嵌入短向量（需 fpylll）+ 多组 $t'=t+qk$ 受限最小二乘 + 多形态模拉回 $v\propto -A^\top\phi(\mathrm{center}(t))$；
   \item \textbf{$L_{\infty}$ 压缩层}：pull kick、$u$ 优先坐标下降、行投影 LS；
   \item \textbf{收尾层}：全维 CP-SAT（\texttt{full}），$t_i$ 进入常数项。
 \end{enumerate}
-默认关闭 BKZ 主种子（与第一类区分），避免 $L_2$ 最优但离 $t$ 远的退化解。
+无 fpylll 时 Kannan 层自动跳过，退化为 CVP 提升 + 模拉回（与 Dilithium 拒绝采样中 $L_\infty$ 截断思想一致 \cite{dilithium2021}）。
 
 \paragraph{可得性结论。}
 第二类的 $E_\infty$ 下界受 $\mathrm{dist}(\mathcal{L},t)$ 影响，不同实例差异大于第一类。预期可达水平与第一类同量级（$E_\infty$ 在 $40$--$50$ 区间），阶梯计分下需逐题评测；若 CVP 种子成功将初始 $E_\infty$ 压至 $30$ 以下，则 CP-SAT 有机会进入 $\gamma{+}4$ 得分档。
@@ -220,15 +221,17 @@ Wagner 子系统碰撞 \cite{wagner2002} 作辅助种子。该分解\textbf{目�
 \paragraph{约束结构。}
 $t\equiv 0$，须同时满足 $E_\infty\le\gamma$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$。当 $E_\infty\le\gamma$ 时，若解\textbf{稠密}则 $\|u\|_2^2+\|v\|_2^2$ 易 $\ge q^2$ 而失格；故第三类除压 $E_\infty$ 外，还须\textbf{稀疏化}以控制 $L_2$ 能量——这与 Wang 等“受限”思想一致 \cite{wang2025}。
 
-\paragraph{本文可落地方案。}
+\paragraph{本文实现方案。}
+模块 \texttt{lattice\_restricted\_svp} 实现 Wang 等 \cite{wang2025} 的\textbf{enumerate-then-slice} 流水线：BKZ 约化后在尾块子格（dimension-for-free）上枚举近似短向量列表，再按 $L_\infty$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$ 做 slice，禁止「仅取 $L_2$ 最短再过滤」。分解链为：
 \begin{enumerate}
-  \item \textbf{大规模采样层}：适度 BKZ 种子 + 高熵权重鼓励分量分散 + 多重重启覆盖；
-  \item \textbf{双约束搜索层}：字典序先压 $(V,S,M)$，在 $E_\infty$ 近界后最小化 $G(u,v)=\max(0,\|u\|_2^2+\|v\|_2^2-q^2+\varepsilon)$（$\varepsilon$ 小正数表严格上界）；
-  \item \textbf{收尾层}：lex CP-SAT 先攻 $L_{\infty}$，再稀疏化抛光使 $L_2$ 达标。
+  \item \textbf{enumerate 层}：\texttt{wang\_restricted\_svp\_v\_seeds}——BKZ + 尾秩 \texttt{wang\_enum\_tail\_rank} 小系数枚举，池大小 \texttt{wang\_enum\_pool\_size}；
+  \item \textbf{slice 层}：残差 $u=r(v)$ 下 $(V,S,M)$ 与 $L_2$ 上界联合筛选；无 $L_2$ 达标候选时回退 $L_2$ 最小种子供抛光；
+  \item \textbf{收尾层}：lex CP-SAT + \texttt{euclid\_polish}。
 \end{enumerate}
+第一类亦默认启用 Wang 的 $L_\infty$ slice（无 $L_2$ 附加约束），与 sieve 并行。
 
 \paragraph{可得性结论。}
-第三类难度高于第一、二类：即使 $E_\infty$ 进入得分档，仍可能因 $\|u\|_2^2+\|v\|_2^2\ge q^2$ 得 0 分。可行可得策略是优先找\textbf{稀疏} $(u,v)$：非零坐标尽可能少、幅度尽可能小，使 $L_2$ 自动 $<q^2$。完整受限 SVP 算法 \cite{wang2025} 尚未接入本文流水线，是当前最大理论缺口。
+第三类难度高于第一、二类：即使 $E_\infty$ 进入得分档，仍可能因 $\|u\|_2^2+\|v\|_2^2\ge q^2$ 得 0 分。可行可得策略是优先找\textbf{稀疏} $(u,v)$。全量十题数值由 \texttt{run\_full\_validation.py} 在服务器上产出（含 \texttt{sis\_scoring} 阶梯计分）。
 
 \subsection{三类共用的 CP-SAT 建模要点}
 
@@ -241,9 +244,35 @@ $t\equiv 0$，须同时满足 $E_\infty\le\gamma$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$�
 % ==================== 3 实验与分析 ====================
 \section{程序实现或算法分析}
 
+\subsection{软件架构与验证流水线}
+
+表~\ref{tab:modules} 列出核心模块与三类题的默认开关（\texttt{apply\_sis\_class\_defaults}）。
+
+\begin{table}[htbp]
+  \centering
+  \caption{开源实现模块与三类题默认配置}
+  \label{tab:modules}
+  \small
+  \begin{tabular}{p{3.2cm}p{4.5cm}p{5.5cm}}
+    \toprule
+    模块 & 功能 & 默认启用类别 \\
+    \midrule
+    \texttt{lattice\_bkz} & LLL/BKZ 2.0 多 $\beta$ 种子 & 类一、类三 \\
+    \texttt{lattice\_sieve} & BKZ 后缀 list sieve & 类一、类三 \\
+    \texttt{lattice\_kannan} & Kannan 嵌入 + BKZ & 类二 \\
+    \texttt{lattice\_restricted\_svp} & Wang enumerate-then-slice + d4f 尾块枚举 & 类一、类三 \\
+    \texttt{sis\_problem\_taxonomy} & 题号 $\to$ 类别、$\gamma$、$<q^2$ 校验 & 全部 \\
+    \texttt{sis\_scoring} & 阶梯计分（$E_\infty$ 相对 $\gamma$） & 验证脚本 \\
+    \texttt{run\_full\_validation.py} & 十题 batch + ILP + JSON 报告 & 评测 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+验证流程：\texttt{check\_algorithms.py} 自检依赖 $\to$ \texttt{run\_full\_validation.py}（\texttt{--batch-rounds 6}，\texttt{--ilp-time-limit 3600}）$\to$ \texttt{full\_validation\_report.json}。服务器推荐安装 fpylll（\texttt{conda install -c conda-forge fpylll}）以启用 BKZ/Kannan 种子层。
+
 \subsection{实验环境与参数}
 
-实验在 Linux 服务器上进行，格约化使用 fpylll 库（封装 LLL/BKZ \cite{fpylll2019}），整数规划使用 Google OR-Tools CP-SAT \cite{ortools2024}。官方实例维度与赛题一致。第一类采用六轮渐进式启发式搜索（重启数、迭代步数、CP 窗口随轮次递增），随后全维 ILP 收尾，时间上限 $T=3600$\,s。本文重点报告第一类四题之完整数据；第二、三类采用相同框架但侧重 CVP 种子与 lex 收尾，全量十题流水线见开源仓库 \cite{sisinfrepo}。
+实验在 Linux 服务器上进行（本地 Windows 仅作冒烟测试），格约化使用 fpylll 库（封装 LLL/BKZ \cite{fpylll2019}），整数规划使用 Google OR-Tools CP-SAT \cite{ortools2024}。官方实例维度与赛题一致。第一类采用六轮渐进式启发式搜索（重启数、迭代步数、CP 窗口随轮次递增），随后全维 ILP 收尾，时间上限 $T=3600$\,s；第二、三类在相同框架下分别启用 Kannan 种子与受限 SVP 种子 + lex 收尾，全量十题由 \texttt{run\_full\_validation.py} 统一评测 \cite{sisinfrepo}。
 
 \subsection{第一类主要数值结果}
 
@@ -291,9 +320,10 @@ $t\equiv 0$，须同时满足 $E_\infty\le\gamma$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$�
     方法 & 文献典型保证 & 对本赛题（$\gamma\!\approx\!15$，$n\!\approx\!100$--$160$） \\
     \midrule
   LLL & $L_2$ 近似短向量 \cite{lenstra1982} & 可作种子；$L_{\infty}$ 仍大 \\
-  BKZ-$\beta$ & $L_2$ 更短，时间指数 \cite{chen2011} & $n+m>160$ 仅 LLL；$\beta$ 全维不可行 \\
+  BKZ + list sieve & $L_2$ 更短候选 \cite{chen2011,becker2016} & 已接入；百维非完整 BDGL，平台仍高 \\
   Wagner 攻击 & 次指数，参数敏感 \cite{wagner2002} & 仅作低维子系统种子 \\
-  Babai CVP & $2^{n/2}$ 近似 \cite{babai1986} & 类二模拉回；不保证 $L_{\infty}$ \\
+  Kannan 嵌入 & CVP $\to$ SVP \cite{kannan1987} & 类二已接入；依赖 fpylll \\
+  受限 SVP 采样 & 盒内直接搜索 \cite{wang2025} & 类三已接入；稀疏参数可调 \\
   全维 ILP & 精确（若时间足够）\cite{kannan1987} & 唯一稳定压降 $\|u\|_{\infty}$；1\,h 后平台 \\
   分块 ILP & 降低维数 & 本题平台处无效 \\
     \bottomrule
@@ -307,16 +337,16 @@ $t\equiv 0$，须同时满足 $E_\infty\le\gamma$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$�
 综合官方思路 \cite{challenge2026}、文献 \cite{chen2011,wang2025,dilithium2021} 与实验，三类问题的\textbf{最终可行可得分解}如下。
 
 \paragraph{第一类（已验证）。}
-\textbf{可得：}同余可行、非平凡，$E_\infty=42$--$45$。\textbf{不可得（当前）：}满分档 $E_\infty\le\gamma$ 及任何阶梯得分（$\gamma=15$ 时 $E_\infty\ge 42\gg\gamma{+}4$）。\textbf{突破路径：}接入 BDGL 筛法作 BKZ 后缀 \cite{becker2016}，或实现 Wang 受限 SVP 直接优化 $L_{\infty}$ \cite{wang2025}。
+\textbf{可得：}同余可行、非平凡，$E_\infty=42$--$45$。\textbf{不可得（当前）：}满分档 $E_\infty\le\gamma$ 及任何阶梯得分（$\gamma=15$ 时 $E_\infty\ge 42\gg\gamma{+}4$）。\textbf{突破路径：}升级 list sieve 为完整 BDGL \cite{becker2016}，或加强 Wang 受限搜索采样规模 \cite{wang2025}。
 
 \paragraph{第二类（待验证）。}
-\textbf{预期可得：}同余可行，$E_\infty$ 约 $40$--$50$（视 $t$ 与 $A$ 而定）。\textbf{突破路径：}低维 Kannan 嵌入（$n\le 80$）+ BKZ 2.0 求种子，再升维 $L_{\infty}$ 修补；参考 Dilithium 拒绝采样中 $L_{\infty}$ 截断技巧 \cite{dilithium2021}。
+\textbf{预期可得：}同余可行，$E_\infty$ 约 $40$--$50$（视 $t$ 与 $A$ 而定）。\textbf{突破路径：}增大 Kannan 嵌入 $\beta$ 与采样轮数；低维子实例上对比 fpylll-BKZ 效率 \cite{dilithium2021}。
 
 \paragraph{第三类（待验证）。}
-\textbf{双重门槛：}须 $E_\infty\le\gamma{+}4$ \emph{且} $\|u\|_2^2+\|v\|_2^2<q^2$。\textbf{预期可得：}稀疏解下 $L_2$ 约束可满足，但 $E_\infty$ 瓶颈与第一类相同。\textbf{突破路径：}按 Wang 等 \cite{wang2025} 实现受限 SVP 采样 + 条件筛选，禁止 $L_2$ 过滤主路径。
+\textbf{双重门槛：}须 $E_\infty\le\gamma{+}4$ \emph{且} $\|u\|_2^2+\|v\|_2^2<q^2$。\textbf{预期可得：}稀疏解下 $L_2$ 约束可满足，但 $E_\infty$ 瓶颈与第一类相同。\textbf{突破路径：}扩大 \texttt{lattice\_restricted\_svp} 采样规模与 lex CP-SAT 中欧氏硬约束权重。
 
 \paragraph{创新性与效率说明（赛题评分要求）。}
-赛题解析要求创新方法须给出\textbf{与现有开源实现对比的效率分析} \cite{challenge2026}。本文相对 fpylll 单跑 BKZ 的优势在于：以 $O(n)$ 增量残差更新将每次邻域试探从矩阵乘法降为列更新；CP-SAT 收尾在 1\,h 内稳定降 $E_\infty$ 约 1--2。劣势在于：未实现筛法，$L_{\infty}$ 平台远高于 BKZ+筛法理论预期。完整对比实验列为后续工作。
+赛题解析要求创新方法须给出\textbf{与现有开源实现对比的效率分析} \cite{challenge2026}。本文相对 fpylll 单跑 BKZ 的优势在于：三类差异化种子自动调度；$O(n)$ 增量残差更新；CP-SAT 收尾在 1\,h 内稳定降 $E_\infty$ 约 1--2。劣势在于：list sieve 为轻量实现，$L_{\infty}$ 平台仍远高于文献 BKZ+BDGL 预期。完整十题效率对比见服务器评测报告。
 
 \subsection{复杂度概要}
 
@@ -325,11 +355,11 @@ $t\equiv 0$，须同时满足 $E_\infty\le\gamma$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$�
 % ==================== 4 总结 ====================
 \section{总结}
 
-本文对照赛题官方三类解析 \cite{challenge2026} 与文献 \cite{chen2011,wang2025,dilithium2021}，给出阶梯计分下的可行可得分解。理论表明：$L_2$ 格约化与 $L_{\infty}$ 目标失配，第三类更禁止“$L_2$ 短向量后过滤”。实验上，第一类四题可将 $E_\infty$ 稳定在 $42$--$45$，同余可满足，但距任何得分档仍远；全维 CP-SAT 是唯一稳定压降手段，存在清晰平台。
+本文对照赛题官方三类解析 \cite{challenge2026} 与文献 \cite{chen2011,wang2025,dilithium2021}，实现 BKZ+sieve、Kannan 与受限 SVP 三类种子模块，并给出阶梯计分下的可行可得分解。理论表明：$L_2$ 格约化与 $L_{\infty}$ 目标失配，第三类更禁止“$L_2$ 短向量后过滤”。实验上，第一类四题可将 $E_\infty$ 稳定在 $42$--$45$，同余可满足，但距任何得分档仍远；全维 CP-SAT 是唯一稳定压降手段，存在清晰平台。
 
-\textbf{主要结论：}（1）第一类可落地方案为 BKZ 2.0 种子 + $L_{\infty}$ 字典序搜索 + 全维 CP-SAT，当前\textbf{可得 0 分档}；（2）第二类应以 Kannan/CVP 种子为主，预期与第一类同量级；（3）第三类须稀疏化满足 $\|u\|_2^2+\|v\|_2^2<q^2$，须接入 Wang 受限 SVP \cite{wang2025} 方可对齐官方路线；（4）进入得分档（$E_\infty\le\gamma{+}4$）需筛法或受限 SVP，非单纯加长 ILP 时间。
+\textbf{主要结论：}（1）第一类流水线为 BKZ + sieve + Wang $L_\infty$ enumerate-slice + full CP-SAT，当前\textbf{可得 0 分档}；（2）第二类已接入 Kannan 嵌入；（3）第三类已全量接入 Wang enumerate-then-slice + d4f 与 $<q^2$ slice；（4）进入得分档须更强 sieve 或更大枚举池，非单纯加长 ILP。
 
-\textbf{展望：}（1）集成 BDGL 筛法 \cite{becker2016}；（2）实现 Wang 等受限 SVP \cite{wang2025}；（3）第二、三类全量评测与 fpylll-BKZ 效率对比；（4）修正第三类校验为官方 $\|u\|_2^2+\|v\|_2^2<q^2$ 上界。代码：\url{https://github.com/arriverl/sisinf}。
+\textbf{展望：}（1）list sieve 升级为完整 BDGL \cite{becker2016}；（2）十题 \texttt{run\_full\_validation} 报告与 fpylll-BKZ 效率对比；（3）第三类 lex 中欧氏约束硬编码；（4）结合 Micciancio--Peikert 参数理论解释 $L_{\infty}$ 平台。代码：\url{https://github.com/arriverl/sisinf}。
 
 \begin{thebibliography}{99}
 

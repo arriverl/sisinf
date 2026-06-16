@@ -8,7 +8,7 @@
 |------|---------------|----------|
 | 一 | `lattice_sieve.py`（BKZ+list sieve） | `python scripts/run_full_validation.py --problems 1,3,6,9` |
 | 二 | `lattice_kannan.py`（Kannan 嵌入，需 fpylll） | `--problems 2,4,7,10` |
-| 三 | `lattice_restricted_svp.py`（受限 SVP）+ `norm_sq < q²` | `--problems 5,8` |
+| 三 | `lattice_restricted_svp.py`（Wang enumerate-slice + d4f）+ `norm_sq < q²` | `--problems 5,8` |
 | 全十题 | `run_full_validation.py` + 阶梯计分 `sis_scoring.py` | `python scripts/run_full_validation.py --quick` |
 
 冒烟：`python scripts/smoke_algorithms.py`

@@ -19,7 +19,7 @@ SIS∞ 2026 赛题一 — 主求解器（多 restart 局部搜索 + 格种子 + 
 - ``lattice_bkz``：BKZ 2.0 种子
 - ``lattice_sieve``：BKZ + list sieve（第一类/第三类）
 - ``lattice_kannan``：Kannan 嵌入 CVP 种子（第二类，需 fpylll）
-- ``lattice_restricted_svp``：受限 SVP 盒内搜索（第三类）
+- ``lattice_restricted_svp``：Wang 受限 SVP enumerate-then-slice + d4f（类 1/3）
 - ``modq_kernel``：kernel walk 的模 q 核基
 - ``_single_restart_inner``：单 restart 主循环（坐标下降、CP、kernel、LS）
 - ``local_search_one``：多 restart 编排（可 ProcessPool 并行）
@@ -97,8 +97,12 @@ class SearchConfig:
     bkz_combo_coeff_max: int = 2
     use_sieve_seeds: bool = False  # BKZ 后缀 list sieve（类 1/3）
     use_kannan_seeds: bool = False  # Kannan 嵌入 CVP 种子（类 2）
-    use_restricted_svp_seeds: bool = False  # Wang 型 L∞ 盒直接搜索（类 3）
+    use_restricted_svp_seeds: bool = False  # Wang 受限 SVP enumerate-then-slice（类 1/3）
     restricted_svp_samples: int = 400
+    wang_enum_tail_rank: int = 28  # dimension-for-free 尾块秩
+    wang_enum_pool_size: int = 512
+    wang_enum_coeff_max: int = 3
+    wang_enum_max_trials: int = 8000
     kannan_embedding_factor: int = 0  # 0 = 自动
 
     # --- 邻域算子 ---
@@ -246,7 +250,10 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
                 "kernel_phase_start": 0.78,
                 "use_sieve_seeds": True,
                 "use_kannan_seeds": False,
-                "use_restricted_svp_seeds": False,
+                "use_restricted_svp_seeds": True,
+                "wang_enum_tail_rank": 32 if aggressive else 28,
+                "wang_enum_pool_size": 640 if aggressive else 512,
+                "wang_enum_max_trials": 12000 if aggressive else 8000,
             }
         )
     if sis_class == 2:
@@ -300,6 +307,10 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
             "use_kannan_seeds": False,
             "use_restricted_svp_seeds": True,
             "restricted_svp_samples": 600 if aggressive else 400,
+            "wang_enum_tail_rank": 36 if aggressive else 28,
+            "wang_enum_pool_size": 768 if aggressive else 512,
+            "wang_enum_coeff_max": 3,
+            "wang_enum_max_trials": 16000 if aggressive else 10000,
         }
     )
 
@@ -1887,6 +1898,12 @@ def local_search_one(
                 gamma,
                 rng,
                 max(16, cfg.bkz_max_vectors),
+                beta=cfg.bkz_beta,
+                max_dim=cfg.bkz_max_dim,
+                tail_rank=cfg.wang_enum_tail_rank,
+                coeff_max=cfg.wang_enum_coeff_max,
+                enum_pool_size=cfg.wang_enum_pool_size,
+                enum_max_trials=cfg.wang_enum_max_trials,
                 n_random=cfg.restricted_svp_samples,
                 require_norm_lt_q2=require_norm_lt_q2,
             )

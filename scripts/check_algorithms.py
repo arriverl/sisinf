@@ -64,7 +64,7 @@ def main() -> None:
 
     from lattice_sieve import collect_sieve_v_seeds
     from lattice_kannan import collect_kannan_v_seeds
-    from lattice_restricted_svp import collect_restricted_svp_v_seeds
+    from lattice_restricted_svp import collect_restricted_svp_v_seeds, wang_restricted_svp_v_seeds
     from sis_scoring import score_from_verify
     from sis_problem_taxonomy import effective_require_norm_lt_q2, problem_class_from_id
     from solve_sisinf import apply_sis_class_defaults, local_search_one, verify_solution
@@ -94,8 +94,17 @@ def main() -> None:
     inst5 = _load(5)
     A5 = np.array(inst5["A"], dtype=np.int64)
     t5 = np.array(inst5["t"], dtype=np.int64)
+    n_wang = len(
+        wang_restricted_svp_v_seeds(
+            A5, t5, q, g, rng, 12, require_norm_lt_q2=True, enum_max_trials=2000
+        )
+    )
+    _line("wang_restricted_svp", "ok" if n_wang > 0 else "warn", f"seeds={n_wang}")
+
     n_rs = len(
-        collect_restricted_svp_v_seeds(A5, t5, q, g, rng, 12, require_norm_lt_q2=True)
+        collect_restricted_svp_v_seeds(
+            A5, t5, q, g, rng, 12, require_norm_lt_q2=True, enum_max_trials=2000
+        )
     )
     _line("lattice_restricted_svp", "ok" if n_rs > 0 else "warn", f"seeds={n_rs}")
 
