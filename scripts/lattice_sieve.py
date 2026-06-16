@@ -1,8 +1,7 @@
 """
-BKZ 后缀的 Gauss / list 筛法启发式（BDGL 思路的轻量实现）。
+BKZ 2.0 + 筛法种子：优先 G6K BDGL2（真筛法），回退 list sieve 启发式。
 
-在 BKZ 约化基上维护短向量池，对小整数系数组合再过滤，输出 v 种子。
-不依赖 fpylll 内置 sieve（多数发行版无 BDGL API）。
+Chen–Nguyen BKZ 2.0 预处理 + Becker et al. BDGL 筛法（经 G6K ``alg='bdgl2'``）。
 """
 
 from __future__ import annotations
@@ -31,9 +30,6 @@ def _list_sieve_short_vectors(
     max_combos: int = 2000,
     coeff_max: int = 2,
 ) -> List[np.ndarray]:
-    """
-    对约化基列做小系数 Gauss 式合并，返回后 m 维（v 部分）候选。
-    """
     d = R.shape[1]
     take = min(d, max(8, n + m // 4))
     cols = [R[:, j].copy() for j in range(take)]
@@ -83,21 +79,52 @@ def collect_sieve_v_seeds(
     combo_depth: int = 6,
     combo_coeff_max: int = 2,
     sieve_pool: int = 48,
+    use_g6k: bool = False,
+    g6k_sieve_alg: str = "bdgl2",
+    g6k_saturation_ratio: float = 0.92,
+    g6k_threads: Optional[int] = None,
+    g6k_bkz_block: Optional[int] = None,
+    g6k_max_lift_vectors: int = 512,
 ) -> List[np.ndarray]:
     """
-    BKZ 2.0 约化 + list sieve 补充 → 裁剪到 [-γ,γ]^m 的 v 种子。
+    BKZ 2.0 + 筛法 → v 种子。``use_g6k=True`` 时走 G6K BDGL2 真筛法。
     """
     if max_vectors <= 0 or beta <= 0:
         return []
+
+    out: List[np.ndarray] = []
+    seen: set = set()
+
+    if use_g6k:
+        try:
+            from lattice_g6k import collect_g6k_v_seeds, g6k_available
+
+            if g6k_available():
+                g6k_vs = collect_g6k_v_seeds(
+                    A,
+                    q,
+                    gamma,
+                    beta,
+                    min(max_vectors, g6k_max_lift_vectors),
+                    max_dim,
+                    rng,
+                    sieve_alg=g6k_sieve_alg,
+                    saturation_ratio=g6k_saturation_ratio,
+                    threads=g6k_threads,
+                    bkz_block=g6k_bkz_block or beta,
+                )
+                for v in g6k_vs:
+                    if _append_clipped_v(out, seen, v, gamma, max_vectors):
+                        return out[:max_vectors]
+        except Exception:
+            pass
+
     B, n, m = _build_ajtai_basis(A, q)
     d = n + m
     if d > max_dim:
         return collect_bkz_v_seeds(
             A, q, gamma, beta, max_vectors, max_dim, combo_depth, combo_coeff_max, rng
         )
-
-    out: List[np.ndarray] = []
-    seen: set = set()
 
     if fpylll_available():
         perm_count = min(2, max(1, max_vectors // 12))
@@ -118,8 +145,10 @@ def collect_sieve_v_seeds(
             _seeds_from_reduced_basis(
                 R, n, m, gamma, max_vectors, combo_depth, combo_coeff_max, seen, out
             )
+            pool_cap = max(sieve_pool, 128 if use_g6k else sieve_pool)
+            max_combos = 8000 if use_g6k else 1500
             for v_part in _list_sieve_short_vectors(
-                R, n, m, pool_cap=sieve_pool, max_combos=1500, coeff_max=2
+                R, n, m, pool_cap=pool_cap, max_combos=max_combos, coeff_max=combo_coeff_max
             ):
                 if _append_clipped_v(out, seen, v_part, gamma, max_vectors):
                     return out[:max_vectors]

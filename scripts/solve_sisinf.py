@@ -17,7 +17,8 @@ SIS∞ 2026 赛题一 — 主求解器（多 restart 局部搜索 + 格种子 + 
 - ``SearchConfig`` / ``apply_sis_class_defaults``：搜索与三类题默认参数
 - ``build_dual_space_candidates``：dual / pull / CVP / 随机盒种子
 - ``lattice_bkz``：BKZ 2.0 种子
-- ``lattice_sieve``：BKZ + list sieve（第一类/第三类）
+- ``lattice_sieve``：BKZ + list sieve / G6K BDGL2（第一类/第三类）
+- ``lattice_g6k``：G6K 真筛法（``--full-max``）
 - ``lattice_kannan``：Kannan 嵌入 CVP 种子（第二类，需 fpylll）
 - ``lattice_restricted_svp``：Wang 受限 SVP enumerate-then-slice + d4f（类 1/3）
 - ``modq_kernel``：kernel walk 的模 q 核基
@@ -104,6 +105,13 @@ class SearchConfig:
     wang_enum_coeff_max: int = 3
     wang_enum_max_trials: int = 8000
     kannan_embedding_factor: int = 0  # 0 = 自动
+    # G6K 真筛法（Becker BDGL via fplll/g6k）
+    use_g6k_sieve: bool = False
+    g6k_sieve_alg: str = "bdgl2"
+    g6k_saturation_ratio: float = 0.92
+    g6k_threads: int = 8
+    g6k_bkz_block: int = 0  # 0 = 跟随 bkz_beta
+    g6k_max_lift_vectors: int = 512
 
     # --- 邻域算子 ---
     pair_relief_every: int = 32  # 双坐标联合移动周期；0 关
@@ -192,15 +200,18 @@ def objective_uv_and_rr_sq(residual: np.ndarray, v: np.ndarray, gamma: int) -> T
     return viol, overflow_sum, max_overflow, rr_sq
 
 
-def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: bool = False) -> SearchConfig:
+def apply_sis_class_defaults(
+    cfg: SearchConfig, sis_class: int, *, aggressive: bool = False, full_max: bool = False
+) -> SearchConfig:
     """
     按赛题类别 1/2/3 叠加默认搜索参数（见 ``sis_problem_taxonomy.py``）。
 
     aggressive=True 时进一步增大 BKZ β、CVP 变体、块 CP 时间等（长跑轮次用）。
+    full_max=True 时在 aggressive 基础上套用 ``sis_full_stack.apply_full_max_stack``（论文全量拉满）。
     """
     if sis_class == 1:
         beta = 32 if aggressive else 28
-        return SearchConfig(
+        out = SearchConfig(
             **{
                 **asdict(cfg),
                 "use_bkz_seeds": True,
@@ -256,11 +267,11 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
                 "wang_enum_max_trials": 12000 if aggressive else 8000,
             }
         )
-    if sis_class == 2:
+    elif sis_class == 2:
         cvp = 14 if aggressive else 10
         pull = 10 if aggressive else 8
         kb = 28 if aggressive else 24
-        return SearchConfig(
+        out = SearchConfig(
             **{
                 **asdict(cfg),
                 "use_bkz_seeds": False,
@@ -283,8 +294,9 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
                 "bkz_max_vectors": 24,
             }
         )
-    euclid = 4.0 if aggressive else 3.0
-    return SearchConfig(
+    else:
+        euclid = 4.0 if aggressive else 3.0
+        out = SearchConfig(
         **{
             **asdict(cfg),
             "use_bkz_seeds": True,
@@ -313,6 +325,15 @@ def apply_sis_class_defaults(cfg: SearchConfig, sis_class: int, *, aggressive: b
             "wang_enum_max_trials": 16000 if aggressive else 10000,
         }
     )
+
+    if full_max:
+        from sis_full_stack import apply_full_max_stack
+
+        out = apply_full_max_stack(
+            apply_sis_class_defaults(cfg, sis_class, aggressive=True, full_max=False),
+            sis_class,
+        )
+    return out
 
 
 def score_key(score: Tuple[int, int, int]) -> Tuple[int, int, int]:
@@ -1906,6 +1927,12 @@ def local_search_one(
                 enum_max_trials=cfg.wang_enum_max_trials,
                 n_random=cfg.restricted_svp_samples,
                 require_norm_lt_q2=require_norm_lt_q2,
+                use_g6k_enumerate=cfg.use_g6k_sieve,
+                g6k_sieve_alg=cfg.g6k_sieve_alg,
+                g6k_saturation_ratio=cfg.g6k_saturation_ratio,
+                g6k_threads=cfg.g6k_threads,
+                g6k_bkz_block=cfg.g6k_bkz_block or cfg.bkz_beta,
+                g6k_max_lift_vectors=cfg.g6k_max_lift_vectors,
             )
             lattice_prepend.extend(rs)
             seed_sources.append(f"restricted_svp:{len(rs)}")
@@ -1965,8 +1992,16 @@ def local_search_one(
                     rng,
                     combo_depth=cfg.bkz_combo_depth,
                     combo_coeff_max=cfg.bkz_combo_coeff_max,
+                    use_g6k=cfg.use_g6k_sieve,
+                    g6k_sieve_alg=cfg.g6k_sieve_alg,
+                    g6k_saturation_ratio=cfg.g6k_saturation_ratio,
+                    g6k_threads=cfg.g6k_threads,
+                    g6k_bkz_block=cfg.g6k_bkz_block or cfg.bkz_beta,
+                    g6k_max_lift_vectors=cfg.g6k_max_lift_vectors,
                 )
-                seed_sources.append("bkz+sieve")
+                seed_sources.append(
+                    "g6k+bkz" if cfg.use_g6k_sieve else "bkz+sieve"
+                )
             else:
                 from lattice_bkz import collect_bkz_v_seeds
 

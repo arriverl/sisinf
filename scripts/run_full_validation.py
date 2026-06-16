@@ -43,6 +43,11 @@ def main() -> None:
     p.add_argument("--ilp-time-limit", type=float, default=300.0)
     p.add_argument("--quick", action="store_true", help="2 batch rounds, 120s ILP")
     p.add_argument("--skip-finish", action="store_true")
+    p.add_argument(
+        "--full-max",
+        action="store_true",
+        help="Paper full stack (G6K BDGL2 + Wang max + 4h ILP if not --quick)",
+    )
     args = p.parse_args()
 
     if args.problems:
@@ -54,7 +59,11 @@ def main() -> None:
         pids = sorted(ALL_IDS)
 
     batch_rounds = 1 if args.quick else args.batch_rounds
+    if args.full_max and not args.quick:
+        batch_rounds = max(batch_rounds, 24)
     ilp_limit = 60.0 if args.quick else args.ilp_time_limit
+    if args.full_max and not args.quick:
+        ilp_limit = max(ilp_limit, 14400.0)
     out_dir = args.output_dir
     os.makedirs(out_dir, exist_ok=True)
 
@@ -94,6 +103,7 @@ def main() -> None:
             args.seed,
             batch_rounds,
             args.quick,
+            full_max=bool(args.full_max),
         )
         rec["batch"] = {
             "success": batch_rec.get("success"),
@@ -128,16 +138,23 @@ def main() -> None:
             continue
 
         ilp_mode = default_ilp_mode_for_class(sis_class)
-        print(f"[p{pid}] finish mode={ilp_mode} ...", flush=True)
+        if args.full_max and not args.quick:
+            from sis_full_stack import full_max_finish_kwargs
+
+            fm = full_max_finish_kwargs(sis_class)
+            ilp_limit = max(ilp_limit, fm["ilp_time_limit"])
+            ilp_mode = fm["ilp_mode"]
+        print(f"[p{pid}] finish mode={ilp_mode} ilp={ilp_limit}s ...", flush=True)
         finish_rep = execute_finish(
             inst_path,
             best_path,
             finish_path,
             ilp_mode=ilp_mode,
             ilp_time_limit=ilp_limit,
-            ilp_workers=4,
-            skip_sub_bkz=True,
+            ilp_workers=8 if args.full_max else 4,
+            skip_sub_bkz=not args.full_max,
             seed=args.seed + pid * 1009,
+            euclid_polish=(sis_class == 3),
         )
         rec["finish"] = {
             "ilp_mode": finish_rep.get("ilp_mode"),

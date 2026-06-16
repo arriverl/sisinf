@@ -113,6 +113,7 @@ def solve_one(
     seed_base: int,
     max_rounds: int,
     quick: bool,
+    full_max: bool = False,
 ) -> Dict[str, Any]:
     """
     单题循环求解直至可行或耗尽 ``max_rounds``（0 表示无限）。
@@ -141,7 +142,8 @@ def solve_one(
         cfg = apply_sis_class_defaults(
             _cfg_for_round(round_idx, seed),
             sis_class,
-            aggressive=round_idx >= 6,
+            aggressive=round_idx >= 6 or full_max,
+            full_max=full_max,
         )
         cfg = _quick_cfg_patch(cfg, quick)
         u, v, meta = local_search_one(A, t, q, gamma, cfg, require_norm)
@@ -207,6 +209,11 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=424242)
     p.add_argument("--max-rounds", type=int, default=12, help="Per problem; 0=unlimited")
     p.add_argument("--quick", action="store_true", help="Shorter timeout/iters for screening")
+    p.add_argument(
+        "--full-max",
+        action="store_true",
+        help="Paper full stack: G6K BDGL2 + Wang max enumerate + 4h ILP budget (server only)",
+    )
     args = p.parse_args()
 
     cls = int(args.sis_class)
@@ -236,6 +243,7 @@ def main() -> None:
                 args.seed,
                 args.max_rounds,
                 args.quick,
+                full_max=bool(args.full_max),
             )
         )
 

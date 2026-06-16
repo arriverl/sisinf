@@ -1,0 +1,2 @@
+# G6K 真筛法（Becker et al. BDGL）。需 Linux 源码编译，见 scripts/install_g6k.sh
+# 依赖 fpylll（conda-forge 推荐）

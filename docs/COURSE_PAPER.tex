@@ -260,7 +260,8 @@ $t\equiv 0$，须同时满足 $E_\infty\le\gamma$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$�
     \texttt{lattice\_bkz} & LLL/BKZ 2.0 多 $\beta$ 种子 & 类一、类三 \\
     \texttt{lattice\_sieve} & BKZ 后缀 list sieve & 类一、类三 \\
     \texttt{lattice\_kannan} & Kannan 嵌入 + BKZ & 类二 \\
-    \texttt{lattice\_restricted\_svp} & Wang enumerate-then-slice + d4f 尾块枚举 & 类一、类三 \\
+    \texttt{lattice\_g6k} & G6K BDGL2 真筛法（Becker SODA 2016） & 类一、类三（\texttt{--full-max}） \\
+    \texttt{lattice\_restricted\_svp} & Wang enumerate-slice + d4f & 类一、类三 \\
     \texttt{sis\_problem\_taxonomy} & 题号 $\to$ 类别、$\gamma$、$<q^2$ 校验 & 全部 \\
     \texttt{sis\_scoring} & 阶梯计分（$E_\infty$ 相对 $\gamma$） & 验证脚本 \\
     \texttt{run\_full\_validation.py} & 十题 batch + ILP + JSON 报告 & 评测 \\
@@ -268,7 +269,7 @@ $t\equiv 0$，须同时满足 $E_\infty\le\gamma$ 与 $\|u\|_2^2+\|v\|_2^2<q^2$�
   \end{tabular}
 \end{table}
 
-验证流程：\texttt{check\_algorithms.py} 自检依赖 $\to$ \texttt{run\_full\_validation.py}（\texttt{--batch-rounds 6}，\texttt{--ilp-time-limit 3600}）$\to$ \texttt{full\_validation\_report.json}。服务器推荐安装 fpylll（\texttt{conda install -c conda-forge fpylll}）以启用 BKZ/Kannan 种子层。
+验证流程：\texttt{check\_algorithms.py} $\to$ \texttt{run\_full\_validation.py}；全量论文栈见 \texttt{docs/FULL\_PAPER\_STACK.md} 与 \texttt{--full-max}（G6K + fpylll）。
 
 \subsection{实验环境与参数}
 

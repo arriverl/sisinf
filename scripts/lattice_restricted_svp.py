@@ -13,7 +13,7 @@ Wang et al. (PQCrypto 2025) 受限 SVP 启发式 — 全量实现骨架。
 from __future__ import annotations
 
 import itertools
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -233,6 +233,12 @@ def wang_restricted_svp_v_seeds(
     enum_pool_size: int = 512,
     enum_max_trials: int = 8000,
     require_norm_lt_q2: bool = False,
+    use_g6k_enumerate: bool = False,
+    g6k_sieve_alg: str = "bdgl2",
+    g6k_saturation_ratio: float = 0.92,
+    g6k_threads: Optional[int] = None,
+    g6k_bkz_block: Optional[int] = None,
+    g6k_max_lift_vectors: int = 512,
 ) -> List[np.ndarray]:
     """
     Wang 受限 SVP 主入口：enumerate（d4f + BKZ）→ slice → 取优 v 种子。
@@ -243,18 +249,46 @@ def wang_restricted_svp_v_seeds(
     A = np.mod(A, q).astype(np.int64, copy=False)
     t = np.mod(t, q).astype(np.int64, copy=False)
     homogeneous = bool(np.all(t == 0))
+    n, m = A.shape[0], A.shape[1]
 
-    raw_vs = _dimension_for_free_enumerate(
-        A,
-        q,
-        gamma,
-        beta,
-        rng,
-        max_dim=max_dim,
-        tail_rank=tail_rank,
-        coeff_max=coeff_max,
-        pool_size=enum_pool_size,
-        max_trials=enum_max_trials,
+    raw_vs: List[np.ndarray] = []
+
+    # Wang enumerate 阶段：G6K 近似 SVP 列表（论文推荐，优于单 L₂ 最短后过滤）
+    if use_g6k_enumerate:
+        try:
+            from lattice_g6k import collect_g6k_lattice_vectors, g6k_available
+
+            if g6k_available():
+                lifts = collect_g6k_lattice_vectors(
+                    A,
+                    q,
+                    beta,
+                    min(g6k_max_lift_vectors, enum_pool_size),
+                    max_dim,
+                    rng,
+                    sieve_alg=g6k_sieve_alg,
+                    saturation_ratio=g6k_saturation_ratio,
+                    threads=g6k_threads,
+                    bkz_block=g6k_bkz_block or beta,
+                )
+                for w in lifts:
+                    raw_vs.append(w[n : n + m].astype(np.int64, copy=False))
+        except Exception:
+            pass
+
+    raw_vs.extend(
+        _dimension_for_free_enumerate(
+            A,
+            q,
+            gamma,
+            beta,
+            rng,
+            max_dim=max_dim,
+            tail_rank=tail_rank,
+            coeff_max=coeff_max,
+            pool_size=enum_pool_size,
+            max_trials=enum_max_trials,
+        )
     )
 
     if not raw_vs:
@@ -328,6 +362,12 @@ def collect_restricted_svp_v_seeds(
     max_nnz: int = 12,
     require_norm_lt_q2: bool = False,
     use_wang_pipeline: bool = True,
+    use_g6k_enumerate: bool = False,
+    g6k_sieve_alg: str = "bdgl2",
+    g6k_saturation_ratio: float = 0.92,
+    g6k_threads: Optional[int] = None,
+    g6k_bkz_block: Optional[int] = None,
+    g6k_max_lift_vectors: int = 512,
 ) -> List[np.ndarray]:
     """
     受限 SVP 种子收集：默认 Wang enumerate-then-slice；辅以盒内稀疏/随机 slice 增广。
@@ -353,6 +393,12 @@ def collect_restricted_svp_v_seeds(
             enum_pool_size=enum_pool_size,
             enum_max_trials=enum_max_trials,
             require_norm_lt_q2=require_norm_lt_q2,
+            use_g6k_enumerate=use_g6k_enumerate,
+            g6k_sieve_alg=g6k_sieve_alg,
+            g6k_saturation_ratio=g6k_saturation_ratio,
+            g6k_threads=g6k_threads,
+            g6k_bkz_block=g6k_bkz_block,
+            g6k_max_lift_vectors=g6k_max_lift_vectors,
         )
         for v in wang_vs:
             if _append_clipped_v(out, seen, v, gamma, max_vectors):
