@@ -62,6 +62,7 @@ def main() -> None:
     except Exception as e:
         _line("ortools", "warn", str(e))
 
+    from lattice_g6k import collect_g6k_v_seeds, g6k_available
     from lattice_sieve import collect_sieve_v_seeds
     from lattice_kannan import collect_kannan_v_seeds
     from lattice_restricted_svp import collect_restricted_svp_v_seeds, wang_restricted_svp_v_seeds
@@ -78,6 +79,14 @@ def main() -> None:
     q, g = int(inst1["q"]), int(inst1["gamma"])
     n_sieve = len(collect_sieve_v_seeds(A1, q, g, 20, 8, 220, rng, combo_depth=3))
     _line("lattice_sieve", "ok" if n_sieve > 0 else "warn", f"seeds={n_sieve}")
+
+    if g6k_available():
+        n_g6k = len(
+            collect_g6k_v_seeds(A1, q, g, 28, 12, 260, rng, threads=2, saturation_ratio=0.5)
+        )
+        _line("lattice_g6k", "ok" if n_g6k > 0 else "warn", f"seeds={n_g6k}")
+    else:
+        _line("lattice_g6k", "warn", "not installed")
 
     inst2 = _load(2)
     A2 = np.array(inst2["A"], dtype=np.int64)

@@ -90,11 +90,24 @@ python3 scripts/run_full_validation.py --problems 5 --full-max --batch-rounds 12
 | 库 | 用途 | 安装 |
 |----|------|------|
 | **fpylll** | LLL / BKZ 2.0 | `conda install -c conda-forge fpylll` |
-| **g6k** | BDGL2 / Gauss 真筛法 | `bash scripts/install_g6k.sh` |
+| **g6k** | BDGL2 / Gauss 真筛法 | `bash scripts/install_g6k.sh`（需先 `pip install Cython cysignals`） |
 | **ortools** | CP-SAT 收尾 | `pip install ortools` |
 | numpy | 数值 | `pip install numpy` |
 
 G6K 不可用时自动回退 `list sieve` + Wang 尾块枚举，但**不等价**于论文全量 BDGL。
+
+### G6K 安装失败：`No module named 'Cython'`
+
+```bash
+conda activate cwh   # 你的环境名
+pip install "Cython>=3.0" cysignals numpy setuptools wheel
+cd /home/cwh/sisinf/vendor/g6k
+python3 setup.py build_ext --inplace
+pip install --no-build-isolation -e .
+cd /home/cwh/sisinf && python3 scripts/check_g6k.py
+```
+
+或重新跑修复后的 `bash scripts/install_g6k.sh`。
 
 ---
 

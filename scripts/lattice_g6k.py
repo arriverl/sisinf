@@ -1,18 +1,13 @@
 """
-G6K 真筛法（BDGL2 / Gauss）接入 — Becker et al. SODA 2016 实用实现。
+G6K 真筛法（BDGL2 / Gauss）+ 投影筛法（高维尾块 d4f）。
 
-依赖（Linux 服务器，源码安装）::
-    git clone https://github.com/fplll/g6k.git
-    cd g6k && pip install -r requirements.txt
-    python setup.py build_ext --inplace && pip install -e .
-
-与 fpylll BKZ 2.0 组合：先 LLL+BKZ 预处理 Ajtai 基，再 ``g6k(alg='bdgl2')``，
-从筛法库 / best_lifts 提取短向量后 m 维为 v 种子。
+d > 90 时仅在最后 ``sieve_dim`` 维子格上跑 bdgl2，再从约化基列 / best_lifts 提取 v。
 """
 
 from __future__ import annotations
 
 import os
+import warnings
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -53,52 +48,146 @@ def lattice_sieve_backend_label() -> str:
 
 def _default_threads() -> int:
     try:
-        return max(1, min(32, (os.cpu_count() or 4)))
+        return max(1, min(8, (os.cpu_count() or 4)))
     except Exception:
-        return 4
+        return 2
+
+
+def _sieve_window(d: int) -> Tuple[int, int]:
+    """返回 (r0, r1) 供 initialize_local：高维只在尾块筛。"""
+    if d <= 96:
+        return 0, d
+    tail = min(80, max(48, d // 3))
+    return d - tail, d
 
 
 def _coeffs_to_list(coeffs) -> List[int]:
+    if coeffs is None:
+        return []
+    if hasattr(coeffs, "coeffs"):
+        coeffs = coeffs.coeffs
+    if hasattr(coeffs, "to_list"):
+        return [int(x) for x in coeffs.to_list()]
     if hasattr(coeffs, "__iter__") and not isinstance(coeffs, (str, bytes)):
         return [int(c) for c in coeffs]
     return [int(coeffs)]
 
 
-def _lattice_vector_from_coeffs(B, coeffs, d: int) -> np.ndarray:
-    """从系数向量得到格向量 w ∈ Z^d。"""
+def _basis_for_g6k(g6k):
+    if hasattr(g6k, "M") and g6k.M is not None and hasattr(g6k.M, "B"):
+        return g6k.M.B
+    if hasattr(g6k, "B"):
+        return g6k.B
+    raise AttributeError("cannot find basis on g6k object")
+
+
+def _basis_to_numpy(B, d: int) -> np.ndarray:
+    out = np.zeros((d, d), dtype=np.int64)
+    for i in range(d):
+        for j in range(d):
+            out[i, j] = int(B[i, j])
+    return out
+
+
+def _lattice_vector_from_coeffs_np(B_np: np.ndarray, cl: List[int]) -> np.ndarray:
+    d = B_np.shape[0]
+    if len(cl) < d:
+        cl = cl + [0] * (d - len(cl))
+    elif len(cl) > d:
+        cl = cl[:d]
+    return (B_np @ np.asarray(cl, dtype=np.int64)).astype(np.int64, copy=False)
+
+
+def _lattice_vector_from_g6k(g6k, coeffs, d: int, B_np: np.ndarray) -> Optional[np.ndarray]:
     cl = _coeffs_to_list(coeffs)
+    if not cl:
+        return None
     try:
-        w = B.multiply_left(cl)
+        w = _basis_for_g6k(g6k).multiply_left(cl)
         return np.array([int(w[i]) for i in range(d)], dtype=np.int64)
     except Exception:
+        return _lattice_vector_from_coeffs_np(B_np, cl)
+
+
+def _extract_vectors_from_g6k(
+    g6k,
+    d: int,
+    B_np: np.ndarray,
+    *,
+    max_take: int,
+) -> List[np.ndarray]:
+    out: List[np.ndarray] = []
+    seen: set = set()
+
+    def _push_w(w: np.ndarray) -> None:
+        if len(out) >= max_take or not np.any(w):
+            return
+        key = w.tobytes()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(w.copy())
+
+    def _push_coeffs(coeffs) -> None:
+        w = _lattice_vector_from_g6k(g6k, coeffs, d, B_np)
+        if w is not None:
+            _push_w(w)
+
+    # best_lifts
+    try:
+        for lift in g6k.best_lifts():
+            if len(out) >= max_take:
+                break
+            if len(lift) >= 3:
+                _push_coeffs(lift[2])
+    except Exception:
         pass
-    w = np.zeros(d, dtype=np.int64)
-    for j, c in enumerate(cl):
-        if c:
-            for i in range(d):
-                w[i] += int(c) * int(B[i, j])
-    return w
+
+    # 数据库
+    try:
+        for i in range(min(len(g6k), max_take * 8)):
+            if len(out) >= max_take:
+                break
+            try:
+                _push_coeffs(g6k.db[i])
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # 约化基列（保底，筛法未饱和时必有）
+    for j in range(min(d, max_take * 2)):
+        if len(out) >= max_take:
+            break
+        col = B_np[:, j]
+        if np.any(col):
+            _push_w(col)
+
+    return out
 
 
-def _make_siever(B_int, *, threads: int, saturation_ratio: float, sieve_alg: str):
+def _make_siever(
+    B_int,
+    *,
+    threads: int,
+    saturation_ratio: float,
+    sieve_alg: str,
+    bkz_block: int,
+) -> Tuple[object, int, np.ndarray]:
     from fpylll import BKZ, LLL
 
     d = B_int.nrows
     LLL.reduction(B_int)
-    bs = min(d, max(40, d // 2))
+    bs = min(d, max(20, int(bkz_block)))
     try:
         BKZ.reduction(B_int, BKZ.Param(block_size=bs, auto_abort=False))
     except TypeError:
         BKZ.reduction(B_int, BKZ.Param(block_size=bs))
 
-    g6k = None
     try:
         from fpylll import GSO
 
-        G = GSO.Mat(
-            B_int,
-            float_type="double",
-        )
+        G = GSO.Mat(B_int, float_type="double")
         from g6k import Siever
 
         g6k = Siever(G)
@@ -106,6 +195,8 @@ def _make_siever(B_int, *, threads: int, saturation_ratio: float, sieve_alg: str
         from g6k import Siever
 
         g6k = Siever(B_int)
+
+    B_np = _basis_to_numpy(_basis_for_g6k(g6k), d)
 
     try:
         from g6k.siever_params import SieverParams
@@ -116,23 +207,24 @@ def _make_siever(B_int, *, threads: int, saturation_ratio: float, sieve_alg: str
         sp["saturation_radius"] = 4.0 / 3.0
         sp["otf_lift"] = True
         sp["sample_by_sums"] = True
-        if sieve_alg in ("bdgl2", "bdgl"):
-            sp["sieve"] = "bdgl2"
         g6k.params = sp
     except Exception:
         pass
 
-    g6k.initialize_local(0, 0, d)
-    try:
-        g6k(alg=sieve_alg if sieve_alg else "bdgl2")
-    except Exception as exc:
-        # SaturationError 表示筛法达到饱和，属正常结束
-        if "Saturation" not in type(exc).__name__:
-            try:
-                g6k(alg="gauss")
-            except Exception:
-                pass
-    return g6k, B_int, d
+    r0, r1 = _sieve_window(d)
+    g6k.initialize_local(r0, r0, r1)
+    alg = sieve_alg if sieve_alg in ("bdgl2", "bdgl", "gauss") else "bdgl2"
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore")
+        try:
+            g6k(alg=alg)
+        except Exception as exc:
+            if "Saturation" not in type(exc).__name__:
+                try:
+                    g6k(alg="gauss")
+                except Exception:
+                    pass
+    return g6k, d, B_np
 
 
 def collect_g6k_lattice_vectors(
@@ -148,9 +240,6 @@ def collect_g6k_lattice_vectors(
     threads: Optional[int] = None,
     bkz_block: Optional[int] = None,
 ) -> List[np.ndarray]:
-    """
-    对 Ajtai 格运行 G6K 筛法，返回完整格向量 w（长度 d=n+m）。
-    """
     if not g6k_available() or max_vectors <= 0:
         return []
 
@@ -160,87 +249,20 @@ def collect_g6k_lattice_vectors(
         return []
 
     th = threads if threads is not None else _default_threads()
-    out: List[np.ndarray] = []
-    seen: set = set()
-
-    trials = min(3, max(1, max_vectors // 64))
-    for t in range(trials):
-        Bt = B.copy()
-        if t > 0:
-            perm = rng.permutation(d)
-            Bt = Bt[:, perm]
-        try:
-            B_int = _integer_matrix_from_basis(Bt)
-            if bkz_block and bkz_block > 0:
-                from fpylll import BKZ, LLL
-
-                LLL.reduction(B_int)
-                bs = min(d, int(bkz_block))
-                try:
-                    BKZ.reduction(B_int, BKZ.Param(block_size=bs, auto_abort=False))
-                except TypeError:
-                    BKZ.reduction(B_int, BKZ.Param(block_size=bs))
-            g6k, B_work, d_work = _make_siever(
-                B_int,
-                threads=th,
-                saturation_ratio=saturation_ratio,
-                sieve_alg=sieve_alg,
-            )
-        except Exception:
-            continue
-
-        def _push_w(w: np.ndarray) -> bool:
-            key = w.tobytes()
-            if key in seen:
-                return False
-            seen.add(key)
-            out.append(w.copy())
-            return len(out) >= max_vectors
-
-        # best_lifts
-        try:
-            for lift in g6k.best_lifts():
-                if len(out) >= max_vectors:
-                    break
-                try:
-                    coeffs = lift[2]
-                    w = _lattice_vector_from_coeffs(B_work, coeffs, d_work)
-                    if t > 0:
-                        inv = np.empty(d, dtype=np.int64)
-                        for j, p in enumerate(perm):
-                            inv[int(p)] = j
-                        w_perm = np.zeros(d, dtype=np.int64)
-                        for j in range(d):
-                            w_perm[inv[j]] = w[j]
-                        w = w_perm
-                    _push_w(w)
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        # 筛法数据库
-        try:
-            for item in g6k.itervalues():
-                if len(out) >= max_vectors:
-                    break
-                try:
-                    if isinstance(item, tuple) and len(item) >= 2:
-                        idx = int(item[0])
-                        coeffs = g6k.db[idx]
-                    else:
-                        coeffs = item
-                    w = _lattice_vector_from_coeffs(B_work, coeffs, d_work)
-                    _push_w(w)
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        if len(out) >= max_vectors:
-            break
-
-    return out[:max_vectors]
+    try:
+        B_int = _integer_matrix_from_basis(B)
+        g6k, d_work, B_np = _make_siever(
+            B_int,
+            threads=th,
+            saturation_ratio=saturation_ratio,
+            sieve_alg=sieve_alg,
+            bkz_block=bkz_block or beta,
+        )
+        return _extract_vectors_from_g6k(
+            g6k, d_work, B_np, max_take=max_vectors
+        )[:max_vectors]
+    except Exception:
+        return []
 
 
 def collect_g6k_v_seeds(
@@ -257,15 +279,14 @@ def collect_g6k_v_seeds(
     threads: Optional[int] = None,
     bkz_block: Optional[int] = None,
 ) -> List[np.ndarray]:
-    """G6K 筛法 → 裁剪到 [-γ,γ]^m 的 v 种子。"""
     if max_vectors <= 0:
         return []
-    B, n, m = _build_ajtai_basis(A, q)
+    _, n, m = _build_ajtai_basis(A, q)
     raw = collect_g6k_lattice_vectors(
         A,
         q,
         beta,
-        max(max_vectors * 4, 128),
+        max(max_vectors * 2, 32),
         max_dim,
         rng,
         sieve_alg=sieve_alg,
@@ -279,4 +300,14 @@ def collect_g6k_v_seeds(
         v_part = w[n : n + m]
         if _append_clipped_v(out, seen, v_part, gamma, max_vectors):
             break
-    return out
+    if out:
+        return out
+    # 筛法库空时回退 BKZ 基列
+    try:
+        from lattice_bkz import collect_bkz_v_seeds
+
+        return collect_bkz_v_seeds(
+            A, q, gamma, beta, max_vectors, max_dim, 4, 2, rng
+        )
+    except Exception:
+        return []

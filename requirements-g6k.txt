@@ -1,2 +1,8 @@
-# G6K 真筛法（Becker et al. BDGL）。需 Linux 源码编译，见 scripts/install_g6k.sh
-# 依赖 fpylll（conda-forge 推荐）
+# G6K 真筛法构建依赖（在 pip install -e g6k 之前必须先装）
+Cython>=3.0
+cysignals
+numpy
+setuptools
+wheel
+
+# G6K 本体：bash scripts/install_g6k.sh（勿直接 pip install g6k 而不带 --no-build-isolation）
