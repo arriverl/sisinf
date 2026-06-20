@@ -79,14 +79,9 @@ $$M=\max\text{溢出},\quad V=\text{违规坐标数},\quad S=\text{溢出量和}
 
 ```
 scripts/
-├── solve_sisinf.py    # 主求解器（SearchConfig、局部搜索）
-├── sis_common.py      # 题号分类、阶梯计分、full-max 参数、mod-q 核基
-├── lattice_seeds.py   # BKZ / G6K / sieve / Kannan / Wang 格种子
-├── sis_heuristics.py  # Wagner、u 优先算子等启发式
-├── sis_finish.py      # CP-SAT 收尾 + execute_finish 管线
-├── sis_run.py         # 十题全量验证 + 按类 batch（主运行入口）
-├── sis_check.py       # 环境自检（fpylll / G6K / ILP / 冒烟 / 算法）
-└── install_g6k.sh     # G6K 安装
+├── solve_sisinf.py   # 统一算法库（分类/计分/格种子/启发式/搜索/CP-SAT 收尾）
+├── sis_cli.py        # 命令行入口（十题验证 / batch / 环境自检）
+└── install_g6k.sh    # G6K 安装
 ```
 
 ### 3.2 环境安装（Linux 推荐）
@@ -97,20 +92,20 @@ cd /home/cwh/sisinf
 conda install -c conda-forge fpylll -y
 pip install numpy ortools "Cython>=3.0" cysignals
 bash scripts/install_g6k.sh
-python3 scripts/sis_check.py all
-python3 scripts/sis_check.py g6k
+python3 scripts/sis_cli.py check all
+python3 scripts/sis_cli.py check g6k
 ```
 
 ### 3.3 运行命令
 
 | 场景 | 命令 |
 |------|------|
-| 冒烟 | `python3 scripts/sis_check.py smoke` |
-| 快速十题（1–3h） | `python3 scripts/sis_run.py --quick` |
-| **标准全量（推荐）** | `python3 scripts/sis_run.py --batch-rounds 6 --ilp-time-limit 3600` |
-| 论文全量 | `python3 scripts/sis_run.py --full-max --batch-rounds 24 --ilp-time-limit 14400` |
-| 分三类 | `python3 scripts/sis_run.py batch --class {1,2,3} --full-max --max-rounds 24` |
-| 单题 | `python3 scripts/sis_run.py --problems 1 --batch-rounds 6 --ilp-time-limit 3600` |
+| 冒烟 | `python3 scripts/sis_cli.py check smoke` |
+| 快速十题（1–3h） | `python3 scripts/sis_cli.py --quick` |
+| **标准全量（推荐）** | `python3 scripts/sis_cli.py --batch-rounds 6 --ilp-time-limit 3600` |
+| 论文全量 | `python3 scripts/sis_cli.py --full-max --batch-rounds 24 --ilp-time-limit 14400` |
+| 分三类 | `python3 scripts/sis_cli.py batch --class {1,2,3} --full-max --max-rounds 24` |
+| 单题 | `python3 scripts/sis_cli.py --problems 1 --batch-rounds 6 --ilp-time-limit 3600` |
 
 报告：`results/full_validation/full_validation_report.json`
 

@@ -278,19 +278,19 @@ conda activate cwh
 conda install -c conda-forge fpylll -y
 pip install numpy ortools "Cython>=3.0" cysignals
 bash scripts/install_g6k.sh
-python3 scripts/sis_check.py all
-python3 scripts/sis_check.py g6k
+python3 scripts/sis_cli.py check all
+python3 scripts/sis_cli.py check g6k
 \end{lstlisting}
 
 \subsection{运行命令}
 
-\textbf{（1）冒烟：}\texttt{python3 scripts/sis\_check.py smoke}
+\textbf{（1）冒烟：}\texttt{python3 scripts/sis\_cli.py check smoke}
 
-\textbf{（2）快速十题：}\texttt{sis\_run.py --quick}（1--3\,h）
+\textbf{（2）快速十题：}\texttt{sis\_cli.py --quick}（1--3\,h）
 
 \textbf{（3）标准全量（推荐）：}
 \begin{lstlisting}[language=bash]
-python3 scripts/sis_run.py \
+python3 scripts/sis_cli.py \
   --batch-rounds 6 --ilp-time-limit 3600
 \end{lstlisting}
 

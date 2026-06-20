@@ -5,21 +5,21 @@ cd "$(dirname "$0")/.."
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
 echo "=== Environment ==="
-python3 scripts/sis_check.py all
+python3 scripts/sis_cli.py check all
 
 echo ""
 echo "=== Quick validation (10 problems, ~1-3h) ==="
-python3 scripts/sis_run.py --quick
+python3 scripts/sis_cli.py --quick
 
 echo ""
 echo "=== Standard production ==="
-echo "python3 scripts/sis_run.py --batch-rounds 6 --ilp-time-limit 3600"
+echo "python3 scripts/sis_cli.py --batch-rounds 6 --ilp-time-limit 3600"
 
 echo ""
 echo "=== Paper full-max (G6K + Wang max, multi-day) ==="
 echo "bash scripts/run_server_max.sh"
 echo "# or:"
-echo "python3 scripts/sis_run.py --full-max --batch-rounds 24 --ilp-time-limit 14400"
+echo "python3 scripts/sis_cli.py --full-max --batch-rounds 24 --ilp-time-limit 14400"
 
 echo ""
 echo "Reports:"

@@ -303,13 +303,8 @@ $$
 ```
 sisinf_challenge2026/
 ├── scripts/
-│   ├── solve_sisinf.py   # 主求解器、SearchConfig、局部搜索
-│   ├── sis_common.py     # 题号分类、阶梯计分、full-max、mod-q 核基
-│   ├── lattice_seeds.py  # BKZ / G6K / sieve / Kannan / Wang 格种子
-│   ├── sis_heuristics.py # Wagner、u 优先算子
-│   ├── sis_finish.py     # CP-SAT 收尾、execute_finish
-│   ├── sis_run.py        # 十题批量评测 + 按类 batch
-│   └── sis_check.py      # 环境自检（十二项算法等）
+│   ├── solve_sisinf.py   # 统一算法库（分类/计分/格种子/启发式/搜索/CP-SAT）
+│   └── sis_cli.py        # 命令行（十题验证 / batch / 自检）
 ├── data/                 # 题目 JSON
 └── results/              # 输出与报告
 ```
@@ -317,7 +312,7 @@ sisinf_challenge2026/
 **主调用链**：
 
 ```
-sis_run.py
+sis_cli.py
   → load instance
   → apply_sis_class_defaults(SearchConfig, class)
   → local_search_one(A, t, q, gamma, cfg)    # 格种子 + 搜索
@@ -327,23 +322,23 @@ sis_run.py
 
 ## 3.2 格种子模块实现要点
 
-格种子逻辑集中在 `lattice_seeds.py`，按 `# ===== lattice_*.py =====` 分段组织。
+格种子逻辑集中在 `solve_sisinf.py` 内 `# ===== lattice_seeds =====` 分段。
 
-### 3.2.1 BKZ 2.0（`lattice_seeds` 内）
+### 3.2.1 BKZ 2.0（`solve_sisinf` 内）
 
 - 构造 $(n+m)$ 维 Ajtai 基 $B$；
 - fpylll 多轮 BKZ（`BKZ.reduction`），块大小 $\beta$；
 - 从约化基列提取 $v$ 候选，经 $\mathrm{center}(t-Av)$ 得 $u$；
 - 组合短向量：`bkz_combo_depth` 控制系数深度。
 
-### 3.2.2 G6K BDGL2（`lattice_seeds` 内）
+### 3.2.2 G6K BDGL2（`solve_sisinf` 内）
 
 - 初始化 G6K `Siever` 对象；
 - 投影到尾块子空间执行 `bdgl2` 筛法；
 - 饱和检测与 BKZ 回退；
 - `--full-max` 时作为第一类/第三类主筛法后端。
 
-### 3.2.3 Wang 受限 SVP（`lattice_seeds` 内）
+### 3.2.3 Wang 受限 SVP（`solve_sisinf` 内）
 
 实现 Wang 论文三阶段：
 
@@ -413,8 +408,8 @@ pip install numpy ortools "Cython>=3.0" cysignals
 bash scripts/install_g6k.sh
 
 # 自检
-python3 scripts/sis_check.py all       # 期望：12 ok
-python3 scripts/sis_check.py g6k       # 期望：problem1 seeds > 0
+python3 scripts/sis_cli.py check all
+python3 scripts/sis_cli.py check g6k
 ```
 
 G6K 安装失败时：
@@ -430,21 +425,21 @@ pip install --no-build-isolation -e .
 ### 3.6.1 冒烟与自检
 
 ```bash
-python3 scripts/sis_check.py smoke
-python3 scripts/sis_check.py all
-python3 scripts/sis_check.py g6k
+python3 scripts/sis_cli.py check smoke
+python3 scripts/sis_cli.py check all
+python3 scripts/sis_cli.py check g6k
 ```
 
 ### 3.6.2 快速十题筛查（约 1–3 小时）
 
 ```bash
-python3 scripts/sis_run.py --quick
+python3 scripts/sis_cli.py --quick
 ```
 
 ### 3.6.3 标准全量验证（推荐）
 
 ```bash
-python3 scripts/sis_run.py \
+python3 scripts/sis_cli.py \
   --batch-rounds 6 \
   --ilp-time-limit 3600 \
   --output-dir results/full_validation
@@ -453,7 +448,7 @@ python3 scripts/sis_run.py \
 ### 3.6.4 论文全量方案（`--full-max`）
 
 ```bash
-python3 scripts/sis_run.py \
+python3 scripts/sis_cli.py \
   --full-max \
   --batch-rounds 24 \
   --ilp-time-limit 14400 \
@@ -463,16 +458,16 @@ python3 scripts/sis_run.py \
 ### 3.6.5 分三类长跑
 
 ```bash
-python3 scripts/sis_run.py batch --class 1 --full-max --max-rounds 24
-python3 scripts/sis_run.py batch --class 2 --full-max --max-rounds 24
-python3 scripts/sis_run.py batch --class 3 --full-max --max-rounds 24
+python3 scripts/sis_cli.py batch --class 1 --full-max --max-rounds 24
+python3 scripts/sis_cli.py batch --class 2 --full-max --max-rounds 24
+python3 scripts/sis_cli.py batch --class 3 --full-max --max-rounds 24
 ```
 
 ### 3.6.6 单题调试
 
 ```bash
-python3 scripts/sis_run.py --problems 1 --batch-rounds 6 --ilp-time-limit 3600
-python3 scripts/sis_run.py --problems 5,8 --full-max --batch-rounds 12
+python3 scripts/sis_cli.py --problems 1 --batch-rounds 6 --ilp-time-limit 3600
+python3 scripts/sis_cli.py --problems 5,8 --full-max --batch-rounds 12
 ```
 
 ### 3.6.7 直接调用主求解器
@@ -492,12 +487,12 @@ python3 scripts/solve_sisinf.py \
 
 - **系统**：Linux 服务器（conda 环境 `cwh`）
 - **依赖**：fpylll、ortools（标准全量未启用 `--full-max`）
-- **命令**：`python3 scripts/sis_run.py --batch-rounds 6 --ilp-time-limit 3600`
+- **命令**：`python3 scripts/sis_cli.py --batch-rounds 6 --ilp-time-limit 3600`
 - **配置**：每题 6 轮 batch 启发式 + 全维 CP-SAT 收尾，单题 ILP 时限 $T=3600$ s
 
 ### 3.7.2 十题全量验证结果
 
-> 数据来源：`sis_run.py` 标准全量跑批（2026-06-03）。p1–p4 已含 ILP 收尾；p5 为 batch 阶段快照；p6–p10 待跑完后补全。
+> 数据来源：`sis_cli.py` 标准全量跑批（2026-06-03）。p1–p4 已含 ILP 收尾；p5 为 batch 阶段快照；p6–p10 待跑完后补全。
 
 | 题号 | 类 | $\gamma$ | $n{=}m$ | 启发式 $E_\infty$ | ILP 后 $E_\infty$ | $\|v\|_\infty$ | 同余 | norm_ok | 阶梯得分 | 状态 |
 |:----:|:--:|:--------:|:-------:|:-----------------:|:-----------------:|:--------------:|:----:|:-------:|:--------:|:----:|
