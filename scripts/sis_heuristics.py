@@ -1,4 +1,8 @@
 """
+第一类 u 优先启发式算子：Wagner、ViolationLS、分层投影、Gaussian 种子等。
+"""
+
+"""
 文献驱动的 u 优先算子（第一类齐次 SIS∞）。
 
 - Wagner 式子系统列表合并（最差 u 行）

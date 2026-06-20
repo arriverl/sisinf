@@ -3,6 +3,6 @@
 # 或在 WSL/Ubuntu：
 #   pip install fpylll
 #
-# 安装后运行：python scripts/check_fpylll.py
+# 安装后运行：python scripts/sis_check.py fpylll
 
 fpylll>=0.6.0

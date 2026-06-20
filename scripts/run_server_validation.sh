@@ -5,28 +5,24 @@ cd "$(dirname "$0")/.."
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
 echo "=== Environment ==="
-python3 scripts/check_fpylll.py || true
-python3 scripts/check_g6k.py || true
-python3 scripts/check_ilp_finish.py || true
-python3 scripts/check_algorithms.py
-python3 scripts/smoke_algorithms.py
+python3 scripts/sis_check.py all
 
 echo ""
 echo "=== Quick validation (10 problems, ~1-3h) ==="
-python3 scripts/run_full_validation.py --quick
+python3 scripts/sis_run.py --quick
 
 echo ""
 echo "=== Standard production ==="
-echo "python3 scripts/run_full_validation.py --batch-rounds 6 --ilp-time-limit 3600"
+echo "python3 scripts/sis_run.py --batch-rounds 6 --ilp-time-limit 3600"
 
 echo ""
 echo "=== Paper full-max (G6K + Wang max, multi-day) ==="
 echo "bash scripts/run_server_max.sh"
 echo "# or:"
-echo "python3 scripts/run_full_validation.py --full-max --batch-rounds 24 --ilp-time-limit 14400"
+echo "python3 scripts/sis_run.py --full-max --batch-rounds 24 --ilp-time-limit 14400"
 
 echo ""
 echo "Reports:"
 echo "  results/full_validation/full_validation_report.json"
 echo "  results/full_max_validation/full_validation_report.json"
-echo "Docs: docs/FULL_PAPER_STACK.md"
+echo "Docs: docs/COURSE_PAPER.md (LaTeX: docs/COURSE_PAPER.tex)"

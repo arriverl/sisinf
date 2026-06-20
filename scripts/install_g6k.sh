@@ -42,5 +42,5 @@ pip install --no-build-isolation -e .
 
 cd "${ROOT}"
 echo "=== 7. 自检 ==="
-python3 scripts/check_g6k.py
+python3 scripts/sis_check.py g6k
 echo "G6K install complete."

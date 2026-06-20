@@ -14,19 +14,16 @@ SIS∞ 2026 赛题一 — 主求解器（多 restart 局部搜索 + 格种子 + 
 
 主要模块
 --------
-- ``SearchConfig`` / ``apply_sis_class_defaults``：搜索与三类题默认参数
+- ``SearchConfig`` / ``apply_sis_class_defaults``：搜索与三类题默认参数（``sis_common``）
 - ``build_dual_space_candidates``：dual / pull / CVP / 随机盒种子
-- ``lattice_bkz``：BKZ 2.0 种子
-- ``lattice_sieve``：BKZ + list sieve / G6K BDGL2（第一类/第三类）
-- ``lattice_g6k``：G6K 真筛法（``--full-max``）
-- ``lattice_kannan``：Kannan 嵌入 CVP 种子（第二类，需 fpylll）
-- ``lattice_restricted_svp``：Wang 受限 SVP enumerate-then-slice + d4f（类 1/3）
-- ``modq_kernel``：kernel walk 的模 q 核基
+- ``lattice_seeds``：BKZ 2.0 / G6K / sieve / Kannan / Wang 格种子
+- ``sis_heuristics``：Wagner、u 优先算子等启发式
+- ``sis_common``：mod-q 核基（kernel walk）
 - ``_single_restart_inner``：单 restart 主循环（坐标下降、CP、kernel、LS）
 - ``local_search_one``：多 restart 编排（可 ProcessPool 并行）
 - ``verify_solution``：与赛题一致的可行性校验
 
-参见 ``sis_problem_taxonomy.py``、``run_class_batch.py``。
+参见 ``sis_run.py``（批量评测入口）、``sis_finish.py``（CP-SAT 收尾）。
 """
 
 from __future__ import annotations
@@ -46,7 +43,7 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from modq_kernel import in_kernel_mod_q, right_kernel_basis_mod_q
+from sis_common import in_kernel_mod_q, right_kernel_basis_mod_q
 
 
 @dataclass
@@ -327,7 +324,7 @@ def apply_sis_class_defaults(
     )
 
     if full_max:
-        from sis_full_stack import apply_full_max_stack
+        from sis_common import apply_full_max_stack
 
         out = apply_full_max_stack(
             apply_sis_class_defaults(cfg, sis_class, aggressive=True, full_max=False),
@@ -607,7 +604,7 @@ def build_dual_space_candidates(
 
     if homogeneous and cfg.gaussian_seed_sigma > 0:
         try:
-            from sis_advanced_u_ops import discrete_gaussian_seeds
+            from sis_heuristics import discrete_gaussian_seeds
 
             for gv in discrete_gaussian_seeds(
                 np.zeros(m, dtype=np.int64),
@@ -1511,7 +1508,7 @@ def _single_restart_inner(
             and step % max(1, cfg.violation_ls_every) == 0
         ):
             try:
-                from sis_advanced_u_ops import violation_ls_step
+                from sis_heuristics import violation_ls_step
 
                 vls = violation_ls_step(
                     A,
@@ -1539,7 +1536,7 @@ def _single_restart_inner(
             and step % max(1, cfg.layered_ls_every) == 0
         ):
             try:
-                from sis_advanced_u_ops import layered_row_projection
+                from sis_heuristics import layered_row_projection
 
                 lls = layered_row_projection(
                     A,
@@ -1561,7 +1558,7 @@ def _single_restart_inner(
 
         if cfg.cheap_lll_trials > 0 and step > 0 and step % 60 == 0:
             try:
-                from sis_advanced_u_ops import cheap_pair_reduction
+                from sis_heuristics import cheap_pair_reduction
 
                 v, sc2 = cheap_pair_reduction(
                     v,
@@ -1614,7 +1611,7 @@ def _single_restart_inner(
                             pull_helped = True
             if not pull_helped and cfg.gaussian_on_stagnation and bad_idx.size > 0:
                 try:
-                    from sis_advanced_u_ops import discrete_gaussian_seeds
+                    from sis_heuristics import discrete_gaussian_seeds
 
                     sig = max(1.0, cfg.gaussian_seed_sigma * (1.0 + 0.05 * score[2]))
                     for gv in discrete_gaussian_seeds(
@@ -1910,7 +1907,7 @@ def local_search_one(
     seed_sources: List[str] = []
     if cfg.use_restricted_svp_seeds:
         try:
-            from lattice_restricted_svp import collect_restricted_svp_v_seeds
+            from lattice_seeds import collect_restricted_svp_v_seeds
 
             rs = collect_restricted_svp_v_seeds(
                 A,
@@ -1940,7 +1937,7 @@ def local_search_one(
             pass
     if cfg.use_wagner_seeds:
         try:
-            from sis_advanced_u_ops import wagner_subsystem_seeds
+            from sis_heuristics import wagner_subsystem_seeds
 
             lattice_prepend.extend(
                 wagner_subsystem_seeds(
@@ -1960,7 +1957,7 @@ def local_search_one(
             pass
     if cfg.use_kannan_seeds and cfg.bkz_beta > 0:
         try:
-            from lattice_kannan import collect_kannan_v_seeds
+            from lattice_seeds import collect_kannan_v_seeds
 
             kn = collect_kannan_v_seeds(
                 A,
@@ -1980,7 +1977,7 @@ def local_search_one(
     if cfg.use_bkz_seeds and cfg.bkz_beta > 0:
         try:
             if cfg.use_sieve_seeds:
-                from lattice_sieve import collect_sieve_v_seeds
+                from lattice_seeds import collect_sieve_v_seeds
 
                 bkz_seeds = collect_sieve_v_seeds(
                     A,
@@ -2003,7 +2000,7 @@ def local_search_one(
                     "g6k+bkz" if cfg.use_g6k_sieve else "bkz+sieve"
                 )
             else:
-                from lattice_bkz import collect_bkz_v_seeds
+                from lattice_seeds import collect_bkz_v_seeds
 
                 bkz_seeds = collect_bkz_v_seeds(
                     A,
@@ -2019,7 +2016,7 @@ def local_search_one(
                 )
                 seed_sources.append("bkz")
             lattice_prepend.extend(bkz_seeds)
-            from lattice_bkz import lattice_backend_label
+            from lattice_seeds import lattice_backend_label
 
             lattice_backend = lattice_backend_label()
         except Exception:
@@ -2218,7 +2215,7 @@ def solve_instances(instances: List[Dict], cfg: SearchConfig) -> List[Dict]:
         A = np.array(inst["A"], dtype=np.int64)
         t = np.array(inst["t"], dtype=np.int64)
         try:
-            from sis_problem_taxonomy import (
+            from sis_common import (
                 effective_require_norm_lt_q2,
                 problem_class_from_instance,
             )
