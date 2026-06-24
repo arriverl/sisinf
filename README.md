@@ -1,35 +1,5 @@
 # 2026 密码数学挑战赛赛题一：SIS∞ 解题工作区
 
-**开源地址：** [https://github.com/arriverl/sisinf](https://github.com/arriverl/sisinf)
-
-**完整课程论文（暨南大学格式）：**
-
-| 文件 | 说明 |
-|------|------|
-| [`docs/COURSE_PAPER.md`](docs/COURSE_PAPER.md) | Markdown 完整版（含封面、公式、四章正文、附录） |
-| [`docs/COURSE_PAPER.tex`](docs/COURSE_PAPER.tex) | LaTeX 正式排版（XeLaTeX 编译） |
-
-```bash
-cd docs && xelatex COURSE_PAPER.tex && xelatex COURSE_PAPER.tex
-```
-
----
-
-## 论文结构（暨南大学本科生课程论文格式）
-
-```
-封面（学院、专业、姓名、学号、课程、指导教师、日期）
-摘要 + 关键词
-目录
-├── 1. 引言
-├── 2. 原理或方案设计
-├── 3. 程序实现或算法分析
-├── 4. 总结
-├── 参考文献（五号）
-└── 附录（五号）
-```
-
-详细内容见 [`docs/COURSE_PAPER.md`](docs/COURSE_PAPER.md)。
 
 ---
 
@@ -87,8 +57,8 @@ scripts/
 ### 3.2 环境安装（Linux 推荐）
 
 ```bash
-conda activate cwh
-cd /home/cwh/sisinf
+conda activate sis
+cd ./sisinf
 conda install -c conda-forge fpylll -y
 pip install numpy ortools "Cython>=3.0" cysignals
 bash scripts/install_g6k.sh
